@@ -21,6 +21,7 @@ import type { ChannelTrend } from "./trend";
 import type { EnrichedVideo, SearchAndEnrichResult } from "./search-types";
 import { classifyVideoCategory, estimateRevenue, type VideoCategory } from "./rpm";
 import { estimateMonetized } from "./monetization";
+import { parseIsoDurationToSeconds } from "./duration";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -128,14 +129,17 @@ type SearchOptions = {
   maxResults?: number;
   order?: "relevance" | "date" | "viewCount" | "rating";
   publishedAfter?: string;
+  publishedBefore?: string;
   regionCode?: string;
 };
 
 type SearchAndEnrichOptions = {
   publishedAfter?: string;
+  publishedBefore?: string;
   days?: number;
   forceMock?: boolean;
   forceRefresh?: boolean;
+  filterLog?: Record<string, unknown>;
 };
 
 async function fetchYoutubeJson<TItem>(
@@ -167,6 +171,7 @@ export async function searchVideos(opts: SearchOptions): Promise<VideoSnippet[]>
   });
 
   if (opts.publishedAfter) params.set("publishedAfter", opts.publishedAfter);
+  if (opts.publishedBefore) params.set("publishedBefore", opts.publishedBefore);
   if (opts.regionCode) params.set("regionCode", opts.regionCode);
 
   const data = await fetchYoutubeJson<SearchResponseItem>("search", params, 300);
@@ -283,6 +288,8 @@ export async function searchAndEnrich(
     maxResults,
     days: options.days,
     publishedAfter: options.publishedAfter,
+    publishedBefore: options.publishedBefore,
+    filterLog: options.filterLog,
   };
 
   const cachedSearch = options.forceRefresh ? null : await getCachedSearch(cacheOptions);
@@ -347,6 +354,7 @@ export async function searchAndEnrich(
       query,
       maxResults,
       publishedAfter: options.publishedAfter,
+      publishedBefore: options.publishedBefore,
     });
     let quotaUnits = 100;
 
@@ -420,6 +428,7 @@ export async function searchAndEnrich(
         const enriched = {
           ...video,
           ...stat,
+          durationSeconds: parseIsoDurationToSeconds(stat.duration),
           tags: stat.tags?.length ? stat.tags : video.tags,
           channelSubs: channel.subs,
           channelAvgViews,

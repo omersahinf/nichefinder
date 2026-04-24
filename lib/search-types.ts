@@ -15,6 +15,7 @@ export interface EnrichedVideo {
   likes: number;
   comments: number;
   duration: string;
+  durationSeconds?: number;
   channelSubs: number;
   channelAvgViews: number;
   channelTotalViews?: number;

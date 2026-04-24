@@ -1,5 +1,6 @@
 import type { EnrichedVideo } from "./search-types";
 import { getOutlierReason } from "./outlier-reasons";
+import { parseIsoDurationToSeconds } from "./duration";
 
 const DAY_MS = 86_400_000;
 
@@ -132,6 +133,7 @@ export function getMockSearchResults(
       likes,
       comments: Math.max(3, Math.round(likes * 0.18)),
       duration: "PT8M12S",
+      durationSeconds: parseIsoDurationToSeconds("PT8M12S"),
       channelSubs,
       channelAvgViews,
       channelTotalViews: Math.round(channelAvgViews * 120),

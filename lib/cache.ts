@@ -2,6 +2,7 @@ import { getOutlierReason } from "./outlier-reasons";
 import type { ChannelStats, VideoStats } from "./youtube";
 import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase";
 import { normalizeKeyword } from "./niche-utils";
+import { parseIsoDurationToSeconds } from "./duration";
 import type { EnrichedVideo, QuotaUsage, SearchSource } from "./search-types";
 import type { ChannelTrend, VideoSample } from "./trend";
 import { estimateRevenue, type VideoCategory } from "./rpm";
@@ -17,6 +18,8 @@ export interface SearchCacheOptions {
   maxResults: number;
   days?: number;
   publishedAfter?: string;
+  publishedBefore?: string;
+  filterLog?: Record<string, unknown>;
 }
 
 export interface CacheLookup<T> {
@@ -80,12 +83,30 @@ interface VideoRow {
   likes: number | string | null;
   comments: number | string | null;
   duration: string | null;
+  duration_seconds?: number | string | null;
   published_at: string;
   thumbnail_url: string | null;
   tags: string[] | null;
   outlier_score: number | string | null;
   outlier_reason: string | null;
   fetched_at: string | null;
+}
+
+interface BrowseVideoRow extends VideoRow {
+  channels: ChannelRow | ChannelRow[] | null;
+}
+
+export interface BrowseFilters {
+  minSubs?: number;
+  maxSubs?: number;
+  minViews?: number;
+  minOutlier?: number;
+  publishedAfter?: string;
+  publishedBefore?: string;
+  minDurationSeconds?: number;
+  maxDurationSeconds?: number;
+  sort?: "outlier" | "views" | "date" | "subs";
+  limit?: number;
 }
 
 interface SearchCacheRow {
@@ -112,6 +133,12 @@ const isFresh = (fetchedAt: string | null | undefined, ttlMs: number): boolean =
 };
 
 const todayKey = (): string => new Date().toISOString().slice(0, 10);
+
+const isMissingDurationSecondsColumn = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "message" in error &&
+  String(error.message).includes("duration_seconds");
 
 export const youtubeBatchUnits = (count: number): number =>
   count > 0 ? Math.ceil(count / 50) : 0;
@@ -579,6 +606,7 @@ export async function upsertVideos(videos: EnrichedVideo[]): Promise<void> {
     likes: video.likes,
     comments: video.comments,
     duration: video.duration,
+    duration_seconds: video.durationSeconds ?? parseIsoDurationToSeconds(video.duration),
     published_at: video.publishedAt,
     thumbnail_url: video.thumbnail,
     tags: video.tags ?? [],
@@ -593,8 +621,71 @@ export async function upsertVideos(videos: EnrichedVideo[]): Promise<void> {
     });
     if (error) throw error;
   } catch (error) {
+    if (isMissingDurationSecondsColumn(error)) {
+      const legacyRows = rows.map(({ duration_seconds, ...row }) => {
+        void duration_seconds;
+        return row;
+      });
+      try {
+        const { error: legacyError } = await client.from("videos").upsert(legacyRows, {
+          onConflict: "youtube_id",
+        });
+        if (legacyError) throw legacyError;
+        return;
+      } catch (legacyError) {
+        console.warn("[cache] legacy video upsert skipped", legacyError);
+        return;
+      }
+    }
     console.warn("[cache] video upsert skipped", error);
   }
+}
+
+function hydrateVideoRow(row: VideoRow, channel: ChannelRow): EnrichedVideo {
+  const views = Number(row.views ?? 0);
+  const channelVideoCount = Number(channel.video_count ?? 0);
+  const channelTotalViews = Number(channel.total_views ?? 0);
+  const channelAvgViews =
+    channelVideoCount > 0 ? channelTotalViews / channelVideoCount : Math.max(views, 1);
+  const outlierScore =
+    channelAvgViews > 0 ? views / channelAvgViews : Number(row.outlier_score ?? 0);
+  const duration = row.duration ?? "";
+
+  const video = {
+    id: row.youtube_id,
+    channelId: row.channel_id,
+    channelTitle: row.channel_title || channel.title,
+    title: row.title,
+    description: row.description ?? "",
+    publishedAt: row.published_at,
+    thumbnail: row.thumbnail_url ?? "",
+    tags: row.tags ?? [],
+    views,
+    likes: Number(row.likes ?? 0),
+    comments: Number(row.comments ?? 0),
+    duration,
+    durationSeconds: Number(row.duration_seconds ?? 0) || parseIsoDurationToSeconds(duration),
+    channelSubs: Number(channel.subs ?? 0),
+    channelAvgViews,
+    channelTotalViews,
+    channelVideoCount,
+    channelCreatedAt: channel.created_at ?? undefined,
+    channelCountry: channel.country ?? undefined,
+    channelThumbnail: channel.thumbnail_url ?? undefined,
+    outlierScore,
+    isMonetized: channel.is_monetized ?? undefined,
+  };
+
+  const category = channel.category as VideoCategory | null;
+  const revenue = category ? estimateRevenue(views, category) : null;
+
+  return {
+    ...video,
+    outlierReason: row.outlier_reason || getOutlierReason(video),
+    category: revenue?.category ?? channel.category ?? undefined,
+    rpmUsd: revenue?.rpmUsd,
+    estimatedRevenueUsd: revenue?.estimatedRevenueUsd,
+  };
 }
 
 async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
@@ -602,12 +693,25 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
   const orderedIds = ids.filter(Boolean);
   if (!client || orderedIds.length === 0) return [];
 
-  const { data: videoData, error: videoError } = await client
+  const initialVideos = await client
     .from("videos")
     .select(
-      "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at",
+      "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,duration_seconds,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at",
     )
     .in("youtube_id", orderedIds);
+  let videoData: unknown = initialVideos.data;
+  let videoError = initialVideos.error;
+
+  if (videoError && isMissingDurationSecondsColumn(videoError)) {
+    const legacy = await client
+      .from("videos")
+      .select(
+        "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at",
+      )
+      .in("youtube_id", orderedIds);
+    videoData = legacy.data;
+    videoError = legacy.error;
+  }
 
   if (videoError) throw videoError;
 
@@ -618,7 +722,7 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
   const { data: channelData, error: channelError } = await client
     .from("channels")
     .select(
-      "youtube_id,title,description,subs,total_views,video_count,country,created_at,thumbnail_url,fetched_at",
+      "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at",
     )
     .in("youtube_id", channelIds);
 
@@ -632,55 +736,110 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
   for (const row of videoRows) {
     const channel = channelMap.get(row.channel_id);
     if (!channel) continue;
-
-    const views = Number(row.views ?? 0);
-    const channelVideoCount = Number(channel.video_count ?? 0);
-    const channelTotalViews = Number(channel.total_views ?? 0);
-    const channelAvgViews =
-      channelVideoCount > 0 ? channelTotalViews / channelVideoCount : Math.max(views, 1);
-    const outlierScore =
-      channelAvgViews > 0 ? views / channelAvgViews : Number(row.outlier_score ?? 0);
-
-    const video = {
-      id: row.youtube_id,
-      channelId: row.channel_id,
-      channelTitle: row.channel_title || channel.title,
-      title: row.title,
-      description: row.description ?? "",
-      publishedAt: row.published_at,
-      thumbnail: row.thumbnail_url ?? "",
-      tags: row.tags ?? [],
-      views,
-      likes: Number(row.likes ?? 0),
-      comments: Number(row.comments ?? 0),
-      duration: row.duration ?? "",
-      channelSubs: Number(channel.subs ?? 0),
-      channelAvgViews,
-      channelTotalViews,
-      channelVideoCount,
-      channelCreatedAt: channel.created_at ?? undefined,
-      channelCountry: channel.country ?? undefined,
-      channelThumbnail: channel.thumbnail_url ?? undefined,
-      outlierScore,
-      isMonetized: channel.is_monetized ?? undefined,
-    };
-
-    const category = channel.category as VideoCategory | null;
-    const revenue = category ? estimateRevenue(views, category) : null;
-
-    resultMap.set(row.youtube_id, {
-      ...video,
-      outlierReason: row.outlier_reason || getOutlierReason(video),
-      category: revenue?.category ?? channel.category ?? undefined,
-      rpmUsd: revenue?.rpmUsd,
-      estimatedRevenueUsd: revenue?.estimatedRevenueUsd,
-    });
+    resultMap.set(row.youtube_id, hydrateVideoRow(row, channel));
   }
 
   return orderedIds.flatMap((id) => {
     const video = resultMap.get(id);
     return video ? [video] : [];
   });
+}
+
+export async function browseCachedVideos(
+  filters: BrowseFilters,
+): Promise<EnrichedVideo[]> {
+  const client = getSupabaseAdmin();
+  if (!client) throw new Error("Supabase is not configured for cached browsing");
+
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+  const runQuery = (includeDurationSeconds: boolean) => {
+    const durationColumn = includeDurationSeconds ? ",duration_seconds" : "";
+    let query = client
+      .from("videos")
+      .select(
+        `youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration${durationColumn},published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at,channels!inner(youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at)`,
+      );
+
+    if (filters.minSubs !== undefined) query = query.gte("channels.subs", filters.minSubs);
+    if (filters.maxSubs !== undefined) query = query.lte("channels.subs", filters.maxSubs);
+    if (filters.minViews !== undefined) query = query.gte("views", filters.minViews);
+    if (filters.minOutlier !== undefined) query = query.gte("outlier_score", filters.minOutlier);
+    if (filters.publishedAfter) query = query.gte("published_at", filters.publishedAfter);
+    if (filters.publishedBefore) query = query.lte("published_at", filters.publishedBefore);
+    if (includeDurationSeconds && filters.minDurationSeconds !== undefined) {
+      query = query.gte("duration_seconds", filters.minDurationSeconds);
+    }
+    if (
+      includeDurationSeconds &&
+      filters.maxDurationSeconds !== undefined &&
+      Number.isFinite(filters.maxDurationSeconds)
+    ) {
+      query = query.lte("duration_seconds", filters.maxDurationSeconds);
+    }
+
+    switch (filters.sort) {
+      case "views":
+        query = query.order("views", { ascending: false });
+        break;
+      case "date":
+        query = query.order("published_at", { ascending: false });
+        break;
+      case "subs":
+        query = query.order("channels(subs)", { ascending: true });
+        break;
+      case "outlier":
+      default:
+        query = query.order("outlier_score", { ascending: false });
+        break;
+    }
+
+    return query.limit(includeDurationSeconds ? limit : 500);
+  };
+
+  let { data, error } = await runQuery(true);
+  if (error && isMissingDurationSecondsColumn(error)) {
+    const legacy = await runQuery(false);
+    data = legacy.data;
+    error = legacy.error;
+  }
+  if (error) throw error;
+
+  const hydrated = ((data ?? []) as unknown as BrowseVideoRow[]).flatMap((row) => {
+    const nested = Array.isArray(row.channels) ? row.channels[0] : row.channels;
+    return nested ? [hydrateVideoRow(row, nested)] : [];
+  });
+
+  return hydrated
+    .filter((video) => {
+      if (
+        filters.minDurationSeconds !== undefined &&
+        (video.durationSeconds ?? 0) < filters.minDurationSeconds
+      ) {
+        return false;
+      }
+      if (
+        filters.maxDurationSeconds !== undefined &&
+        Number.isFinite(filters.maxDurationSeconds) &&
+        (video.durationSeconds ?? 0) > filters.maxDurationSeconds
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      switch (filters.sort) {
+        case "views":
+          return b.views - a.views;
+        case "date":
+          return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+        case "subs":
+          return a.channelSubs - b.channelSubs;
+        case "outlier":
+        default:
+          return b.outlierScore - a.outlierScore;
+      }
+    })
+    .slice(0, limit);
 }
 
 export async function getCachedSearch(
@@ -705,11 +864,16 @@ export async function getCachedSearch(
     const hydrated = await hydrateCachedVideos(videoIds);
     if (hydrated.length < videoIds.length) return null;
 
-    const filtered = opts.publishedAfter
+    const afterFiltered = opts.publishedAfter
       ? hydrated.filter(
           (video) => new Date(video.publishedAt).getTime() >= new Date(opts.publishedAfter!).getTime(),
         )
       : hydrated;
+    const filtered = opts.publishedBefore
+      ? afterFiltered.filter(
+          (video) => new Date(video.publishedAt).getTime() <= new Date(opts.publishedBefore!).getTime(),
+        )
+      : afterFiltered;
 
     return {
       results: filtered.slice(0, opts.maxResults),
@@ -740,6 +904,8 @@ export async function writeSearchCache(
           maxResults: opts.maxResults,
           days: opts.days ?? 0,
           publishedAfter: opts.publishedAfter ?? null,
+          publishedBefore: opts.publishedBefore ?? null,
+          ...(opts.filterLog ?? {}),
         },
         video_ids: results.map((video) => video.id),
         results_count: results.length,
