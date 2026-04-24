@@ -8,6 +8,7 @@ import {
   getChannelVideoSamples,
   promoteToSeed,
   upsertChannelCategory,
+  upsertChannelTags,
   upsertChannelTrends,
   upsertChannels,
   upsertVideos,
@@ -46,6 +47,7 @@ export interface VideoStats {
   likes: number;
   comments: number;
   duration: string;
+  tags?: string[];
 }
 
 export interface ChannelStats {
@@ -88,6 +90,9 @@ interface VideosResponseItem {
   };
   contentDetails?: {
     duration?: string;
+  };
+  snippet?: {
+    tags?: string[];
   };
 }
 
@@ -206,7 +211,7 @@ export async function getVideoStats(ids: string[]): Promise<VideoStats[]> {
   for (const chunk of chunks) {
     const params = new URLSearchParams({
       key: apiKey(),
-      part: "statistics,contentDetails",
+      part: "snippet,statistics,contentDetails",
       id: chunk.join(","),
     });
 
@@ -219,6 +224,7 @@ export async function getVideoStats(ids: string[]): Promise<VideoStats[]> {
         likes: Number(item.statistics?.likeCount ?? 0),
         comments: Number(item.statistics?.commentCount ?? 0),
         duration: item.contentDetails?.duration ?? "",
+        tags: item.snippet?.tags ?? [],
       });
     }
   }
@@ -395,7 +401,7 @@ export async function searchAndEnrich(
 
         const categoryMatch = classifyVideoCategory(
           video.title,
-          video.tags,
+          stat.tags?.length ? stat.tags : video.tags,
           video.description,
         );
         const revenue = estimateRevenue(stat.views, categoryMatch.category);
@@ -410,6 +416,7 @@ export async function searchAndEnrich(
         const enriched = {
           ...video,
           ...stat,
+          tags: stat.tags?.length ? stat.tags : video.tags,
           channelSubs: channel.subs,
           channelAvgViews,
           channelTotalViews: channel.totalViews,
@@ -450,6 +457,29 @@ export async function searchAndEnrich(
     );
     await Promise.all(
       categoryEntries.map((entry) => upsertChannelCategory(entry.channelId, entry.category)),
+    );
+
+    const tagCountsByChannel = new Map<string, Map<string, number>>();
+    for (const video of results) {
+      const tags = video.tags ?? [];
+      if (tags.length === 0) continue;
+      const counts = tagCountsByChannel.get(video.channelId) ?? new Map<string, number>();
+      for (const tag of tags) {
+        const normalized = tag.trim().toLowerCase();
+        if (!normalized) continue;
+        counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+      }
+      tagCountsByChannel.set(video.channelId, counts);
+    }
+
+    await Promise.all(
+      [...tagCountsByChannel.entries()].map(([channelId, counts]) => {
+        const tags = [...counts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 20)
+          .map(([tag]) => tag);
+        return upsertChannelTags(channelId, tags);
+      }),
     );
 
     // Compute trend per channel using cached+fresh videos for each channel.

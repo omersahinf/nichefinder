@@ -3,6 +3,7 @@ import { getLatestNicheSnapshot } from "@/lib/cache";
 import { computeSaturation } from "@/lib/saturation";
 import { keywordFromSlug } from "@/lib/niche-utils";
 import { SaturationBarsChart, VideoTimelineChart } from "@/app/components/charts";
+import { findSimilarChannels } from "@/lib/similar";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,9 @@ export default async function NichePage({ params, searchParams }: NichePageProps
   const topChannels = Array.from(channelMap.values())
     .sort((a, b) => b.bestOutlier - a.bestOutlier)
     .slice(0, 10);
+  const similarChannels = topChannels[0]
+    ? await findSimilarChannels(topChannels[0].id, 10)
+    : [];
 
   const topVideos = [...results].sort((a, b) => b.outlierScore - a.outlierScore).slice(0, 10);
   const totalEstimatedRevenue = topVideos.reduce(
@@ -202,6 +206,41 @@ export default async function NichePage({ params, searchParams }: NichePageProps
                 ))}
               </div>
             </section>
+
+            {similarChannels.length > 0 && (
+              <section className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-5 lg:col-span-2">
+                <h2 className="mb-4 text-lg font-semibold">Similar channels</h2>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {similarChannels.map((channel) => (
+                    <a
+                      key={channel.channelId}
+                      href={`https://youtube.com/channel/${channel.channelId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-3 rounded border border-neutral-800 bg-neutral-950/50 p-3 hover:border-neutral-700"
+                    >
+                      {channel.thumbnail && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={channel.thumbnail}
+                          alt=""
+                          className="h-10 w-10 rounded-full object-cover"
+                        />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium">{channel.title}</div>
+                        <div className="font-mono text-xs text-neutral-500">
+                          {fmt(channel.subs)} subs
+                        </div>
+                      </div>
+                      <div className="font-mono text-xs text-emerald-300">
+                        {(channel.similarity * 100).toFixed(0)}%
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-5 lg:col-span-2">
               <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">

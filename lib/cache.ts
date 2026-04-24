@@ -60,6 +60,7 @@ interface ChannelRow {
   country: string | null;
   created_at: string | null;
   category: string | null;
+  tags?: string[] | null;
   thumbnail_url: string | null;
   fetched_at: string | null;
   trend_growth_30d?: number | string | null;
@@ -334,6 +335,27 @@ export async function upsertChannelCategory(
     if (error) throw error;
   } catch (error) {
     console.warn("[cache] channel category upsert skipped", error);
+  }
+}
+
+export async function upsertChannelTags(
+  channelId: string,
+  tags: string[],
+): Promise<void> {
+  const client = getSupabaseAdmin();
+  if (!client || !channelId) return;
+
+  const normalized = [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))]
+    .slice(0, 20);
+
+  try {
+    const { error } = await client
+      .from("channels")
+      .update({ tags: normalized })
+      .eq("youtube_id", channelId);
+    if (error) throw error;
+  } catch (error) {
+    console.warn("[cache] channel tags upsert skipped", error);
   }
 }
 
