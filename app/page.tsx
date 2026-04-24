@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { SaturationReport } from "@/lib/saturation";
 import { slugifyNiche } from "@/lib/niche-utils";
 import type { EnrichedVideo, QuotaUsage, SearchSource } from "@/lib/search-types";
+import { TrendSparkline } from "@/app/components/charts";
 
 type SortKey = "outlier" | "views" | "date" | "subs";
 
@@ -534,6 +535,7 @@ export default function Home() {
                               Math.round(r.channelTrend.avgRecent),
                             )} views (${r.channelTrend.sampleSize} videos)`}
                           >
+                            <TrendSparkline trend={r.channelTrend} />
                             {r.channelTrend.direction === "rising"
                               ? "↑"
                               : r.channelTrend.direction === "falling"

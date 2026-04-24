@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getLatestNicheSnapshot } from "@/lib/cache";
 import { computeSaturation } from "@/lib/saturation";
 import { keywordFromSlug } from "@/lib/niche-utils";
+import { SaturationBarsChart, VideoTimelineChart } from "@/app/components/charts";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,16 @@ export default async function NichePage({ params, searchParams }: NichePageProps
   const timeline = [...results]
     .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
     .slice(0, 12);
+  const timelineChartData = [...timeline]
+    .reverse()
+    .map((video) => ({
+      date: new Date(video.publishedAt).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      }),
+      title: video.title,
+      views: video.views,
+    }));
 
   const bars = saturation
     ? [
@@ -149,22 +160,7 @@ export default async function NichePage({ params, searchParams }: NichePageProps
                 </span>
               </div>
 
-              <div className="space-y-4">
-                {bars.map((bar) => (
-                  <div key={bar.label}>
-                    <div className="mb-1 flex justify-between text-xs text-neutral-400">
-                      <span>{bar.label}</span>
-                      <span className="font-mono">{bar.display}</span>
-                    </div>
-                    <div className="h-2 rounded bg-neutral-800">
-                      <div
-                        className="h-2 rounded bg-red-500"
-                        style={{ width: `${Math.max(4, Math.min(100, bar.value * 100))}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <SaturationBarsChart data={bars} />
 
               <div className="mt-6 grid grid-cols-3 gap-3 text-sm">
                 <div>
@@ -234,6 +230,7 @@ export default async function NichePage({ params, searchParams }: NichePageProps
 
             <section className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-5 lg:col-span-2">
               <h2 className="mb-4 text-lg font-semibold">Video timeline</h2>
+              <VideoTimelineChart data={timelineChartData} />
               <div className="overflow-x-auto">
                 <table className="min-w-[820px] w-full text-sm">
                   <thead className="text-left text-xs uppercase tracking-wider text-neutral-500">
