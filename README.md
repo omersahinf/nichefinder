@@ -1,36 +1,66 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NicheFinder
 
-## Getting Started
+NicheFinder is a Next.js app for YouTube niche discovery, outlier analysis, trend tracking, RPM/revenue estimates, seed-channel refresh, and alerting.
 
-First, run the development server:
+## Stack
+
+- Next.js 16 App Router
+- React 19
+- Tailwind CSS 4
+- Supabase Postgres
+- YouTube Data API v3 and YouTube channel RSS
+- Recharts
+- Resend for alert emails
+
+## Setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Copy the environment example and fill in credentials:
+
+```bash
+cp .env.local.example .env.local
+```
+
+Required values:
+
+- `YOUTUBE_API_KEY`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `CRON_SECRET`
+- `RESEND_API_KEY` and `RESEND_FROM` for email alerts
+
+3. Apply Supabase migrations from `supabase/migrations` in order.
+
+4. Run the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`. If the port is busy, Next.js will print the alternate local URL.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Verification
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run lint
+npm run build
+```
 
-## Learn More
+Cron smoke:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/refresh-seeds
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Cached searches use Supabase and can be bypassed with `force=1`.
+- Seed refresh uses RSS for discovery and batched YouTube API calls for stats.
+- Similar-channel and alert features require migrations `005_channel_tags.sql` and `006_alerts.sql` to be applied to the active Supabase project.
