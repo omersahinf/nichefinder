@@ -19,6 +19,7 @@ import { computeChannelTrend } from "./trend";
 import type { ChannelTrend } from "./trend";
 import type { EnrichedVideo, SearchAndEnrichResult } from "./search-types";
 import { classifyVideoCategory, estimateRevenue, type VideoCategory } from "./rpm";
+import { estimateMonetized } from "./monetization";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -57,6 +58,7 @@ export interface ChannelStats {
   createdAt: string;
   thumbnail: string;
   description: string;
+  isMonetized?: boolean;
 }
 
 interface SearchResponseItem {
@@ -360,7 +362,16 @@ export async function searchAndEnrich(
       youtubeBatchUnits(cachedStats.missingIds.length) +
       youtubeBatchUnits(cachedChannels.missingIds.length);
 
-    await upsertChannels(freshChannels);
+    const freshChannelsWithMonetization = freshChannels.map((channel) => ({
+      ...channel,
+      isMonetized: estimateMonetized({
+        subs: channel.subs,
+        videoCount: channel.videoCount,
+        createdAt: channel.createdAt,
+      }),
+    }));
+
+    await upsertChannels(freshChannelsWithMonetization);
 
     const statsMap = new Map([
       ...cachedStats.cached,
@@ -368,7 +379,7 @@ export async function searchAndEnrich(
     ]);
     const channelMap = new Map([
       ...cachedChannels.cached,
-      ...freshChannels.map((channel) => [channel.id, channel] as const),
+      ...freshChannelsWithMonetization.map((channel) => [channel.id, channel] as const),
     ]);
 
     const results = videos
@@ -388,6 +399,13 @@ export async function searchAndEnrich(
           video.description,
         );
         const revenue = estimateRevenue(stat.views, categoryMatch.category);
+        const isMonetized =
+          channel.isMonetized ??
+          estimateMonetized({
+            subs: channel.subs,
+            videoCount: channel.videoCount,
+            createdAt: channel.createdAt,
+          });
 
         const enriched = {
           ...video,
@@ -403,6 +421,7 @@ export async function searchAndEnrich(
           category: revenue.category,
           rpmUsd: revenue.rpmUsd,
           estimatedRevenueUsd: revenue.estimatedRevenueUsd,
+          isMonetized,
         };
 
         return {

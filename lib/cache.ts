@@ -66,6 +66,7 @@ interface ChannelRow {
   trend_direction?: string | null;
   trend_sample_size?: number | string | null;
   avg_views_last_30?: number | string | null;
+  is_monetized?: boolean | null;
 }
 
 interface VideoRow {
@@ -140,7 +141,7 @@ export async function getCachedChannelStats(
     const { data, error } = await client
       .from("channels")
       .select(
-        "youtube_id,title,description,subs,total_views,video_count,country,created_at,thumbnail_url,fetched_at",
+        "youtube_id,title,description,subs,total_views,video_count,country,created_at,is_monetized,thumbnail_url,fetched_at",
       )
       .in("youtube_id", uniqueIds);
 
@@ -169,6 +170,7 @@ export async function getCachedChannelStats(
         createdAt: row.created_at ?? "",
         thumbnail: row.thumbnail_url ?? "",
         description: row.description ?? "",
+        isMonetized: row.is_monetized ?? undefined,
       });
     }
 
@@ -236,6 +238,7 @@ export async function upsertChannels(channels: ChannelStats[]): Promise<void> {
     country: channel.country ?? null,
     created_at: channel.createdAt || null,
     thumbnail_url: channel.thumbnail,
+    is_monetized: channel.isMonetized ?? null,
     fetched_at: fetchedAt,
   }));
 
@@ -464,7 +467,7 @@ export async function listSeedChannels(limit = 100): Promise<SeedChannel[]> {
   const { data: channelData, error: channelError } = await client
     .from("channels")
     .select(
-      "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,thumbnail_url,fetched_at",
+      "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,is_monetized,thumbnail_url,fetched_at",
     )
     .in("youtube_id", channelIds);
 
@@ -617,6 +620,7 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
       channelCountry: channel.country ?? undefined,
       channelThumbnail: channel.thumbnail_url ?? undefined,
       outlierScore,
+      isMonetized: channel.is_monetized ?? undefined,
     };
 
     const category = channel.category as VideoCategory | null;

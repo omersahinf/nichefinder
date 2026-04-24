@@ -28,6 +28,7 @@ export interface EnrichedVideo {
   category?: string;
   rpmUsd?: number;
   estimatedRevenueUsd?: number;
+  isMonetized?: boolean;
 }
 
 export interface SearchAndEnrichResult {

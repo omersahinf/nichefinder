@@ -15,6 +15,7 @@ interface Filters {
   minOutlier: number;
   days: number; // 0 = all time
   sort: SortKey;
+  monetizedOnly: boolean;
 }
 
 const DEFAULT_FILTERS: Filters = {
@@ -24,6 +25,7 @@ const DEFAULT_FILTERS: Filters = {
   minOutlier: 0,
   days: 0,
   sort: "outlier",
+  monetizedOnly: false,
 };
 
 const fmt = (n: number): string => {
@@ -138,7 +140,8 @@ export default function Home() {
         r.channelSubs >= filters.minSubs &&
         r.channelSubs <= filters.maxSubs &&
         r.views >= filters.minViews &&
-        r.outlierScore >= filters.minOutlier,
+        r.outlierScore >= filters.minOutlier &&
+        (!filters.monetizedOnly || r.isMonetized === true),
     );
     const sorted = [...list];
     sorted.sort((a, b) => {
@@ -303,6 +306,18 @@ export default function Home() {
             />
             Show revenue
           </label>
+
+          <label className="ml-0 mt-3 inline-flex items-center gap-2 text-sm text-neutral-300 md:ml-4 md:mt-4">
+            <input
+              type="checkbox"
+              checked={filters.monetizedOnly}
+              onChange={(event) =>
+                setFilters((f) => ({ ...f, monetizedOnly: event.target.checked }))
+              }
+              className="h-4 w-4 rounded border-neutral-700 bg-neutral-950 accent-red-600"
+            />
+            Monetized only
+          </label>
         </div>
 
         {error && (
@@ -458,7 +473,14 @@ export default function Home() {
                             ) : (
                               <div className="truncate font-medium">{r.title}</div>
                             )}
-                            <div className="text-xs text-neutral-400">{r.channelTitle}</div>
+                            <div className="flex items-center gap-1 text-xs text-neutral-400">
+                              <span>{r.channelTitle}</span>
+                              {r.isMonetized && (
+                                <span title="Estimated monetized" aria-label="Estimated monetized">
+                                  💰
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
