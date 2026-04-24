@@ -224,6 +224,26 @@ export async function getCachedVideoStats(ids: string[]): Promise<CacheLookup<Vi
   }
 }
 
+export async function getExistingVideoIds(ids: string[]): Promise<Set<string>> {
+  const uniqueIds = [...new Set(ids)].filter(Boolean);
+  const client = getSupabaseAdmin();
+  if (!client || uniqueIds.length === 0) return new Set();
+
+  try {
+    const { data, error } = await client
+      .from("videos")
+      .select("youtube_id")
+      .in("youtube_id", uniqueIds);
+
+    if (error) throw error;
+
+    return new Set(((data ?? []) as Array<{ youtube_id: string }>).map((row) => row.youtube_id));
+  } catch (error) {
+    console.warn("[cache] existing video lookup skipped", error);
+    return new Set();
+  }
+}
+
 export async function upsertChannels(channels: ChannelStats[]): Promise<void> {
   const client = getSupabaseAdmin();
   if (!client || channels.length === 0) return;

@@ -1,12 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listSeedChannels,
-  markSeedChannelsCrawled,
-  recordApiUsage,
-  upsertChannels,
-  youtubeBatchUnits,
-} from "@/lib/cache";
-import { getChannelStats } from "@/lib/youtube";
+import { refreshSeedChannels } from "@/lib/refresh-seeds";
 
 export const dynamic = "force-dynamic";
 
@@ -36,34 +29,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const body = (await req.json().catch(() => ({}))) as { channelIds?: string[] };
     const requestedIds = cleanChannelIds(body.channelIds);
-    const seedIds =
-      requestedIds.length > 0
-        ? requestedIds
-        : (await listSeedChannels(50)).map((seed) => seed.channelId);
 
-    if (seedIds.length === 0) {
-      return NextResponse.json({ refreshed: 0, quotaUnits: 0 });
-    }
-
-    const channels = await getChannelStats(seedIds);
-    await upsertChannels(channels);
-    await markSeedChannelsCrawled(channels.map((channel) => channel.id));
-
-    const quotaUnits = youtubeBatchUnits(seedIds.length);
-    await recordApiUsage(
-      quotaUnits,
-      {
-        action: "admin_seed_refresh",
-        requested: seedIds.length,
-        refreshed: channels.length,
-      },
-      "admin",
-    );
+    const result = await refreshSeedChannels({
+      channelIds: requestedIds,
+      limit: 50,
+      usageSource: "admin",
+    });
 
     return NextResponse.json({
-      requested: seedIds.length,
-      refreshed: channels.length,
-      quotaUnits,
+      requested: result.seeds,
+      refreshed: result.refreshedChannels,
+      newVideos: result.newVideos,
+      quotaUnits: result.units,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to refresh seeds";
