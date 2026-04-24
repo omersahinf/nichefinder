@@ -1,11 +1,13 @@
 import { getMockSearchResults } from "./mock-youtube";
 import {
   getCachedChannelStats,
+  getCachedChannelCategories,
   getCachedChannelTrends,
   getCachedSearch,
   getCachedVideoStats,
   getChannelVideoSamples,
   promoteToSeed,
+  upsertChannelCategory,
   upsertChannelTrends,
   upsertChannels,
   upsertVideos,
@@ -16,6 +18,7 @@ import { getOutlierReason } from "./outlier-reasons";
 import { computeChannelTrend } from "./trend";
 import type { ChannelTrend } from "./trend";
 import type { EnrichedVideo, SearchAndEnrichResult } from "./search-types";
+import { classifyVideoCategory, estimateRevenue, type VideoCategory } from "./rpm";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -275,13 +278,26 @@ export async function searchAndEnrich(
 
   const cachedResults = await getCachedSearch(cacheOptions);
   if (cachedResults) {
-    const trendMap = await getCachedChannelTrends(
-      [...new Set(cachedResults.map((video) => video.channelId))],
-    );
-    const withTrend = cachedResults.map((video) => ({
-      ...video,
-      channelTrend: trendMap.get(video.channelId) ?? null,
-    }));
+    const cachedChannelIds = [...new Set(cachedResults.map((video) => video.channelId))];
+    const [trendMap, categoryMap] = await Promise.all([
+      getCachedChannelTrends(cachedChannelIds),
+      getCachedChannelCategories(cachedChannelIds),
+    ]);
+    const withTrend = cachedResults.map((video) => {
+      const category = video.category ?? categoryMap.get(video.channelId);
+      const revenue = category
+        ? estimateRevenue(video.views, category as VideoCategory)
+        : null;
+
+      return {
+        ...video,
+        channelTrend: trendMap.get(video.channelId) ?? null,
+        category,
+        rpmUsd: video.rpmUsd ?? revenue?.rpmUsd,
+        estimatedRevenueUsd:
+          video.estimatedRevenueUsd ?? revenue?.estimatedRevenueUsd,
+      };
+    });
 
     await promoteToSeed(
       withTrend.slice(0, 10).map((video) => video.channelId),
@@ -366,6 +382,13 @@ export async function searchAndEnrich(
           channel.videoCount > 0 ? channel.totalViews / channel.videoCount : Math.max(stat.views, 1);
         const outlierScore = channelAvgViews > 0 ? stat.views / channelAvgViews : 0;
 
+        const categoryMatch = classifyVideoCategory(
+          video.title,
+          video.tags,
+          video.description,
+        );
+        const revenue = estimateRevenue(stat.views, categoryMatch.category);
+
         const enriched = {
           ...video,
           ...stat,
@@ -377,6 +400,9 @@ export async function searchAndEnrich(
           channelCountry: channel.country,
           channelThumbnail: channel.thumbnail,
           outlierScore,
+          category: revenue.category,
+          rpmUsd: revenue.rpmUsd,
+          estimatedRevenueUsd: revenue.estimatedRevenueUsd,
         };
 
         return {
@@ -388,6 +414,24 @@ export async function searchAndEnrich(
       .sort((a, b) => b.outlierScore - a.outlierScore);
 
     await upsertVideos(results);
+
+    const categoryCountsByChannel = new Map<string, Map<string, number>>();
+    for (const video of results) {
+      if (!video.category) continue;
+      const counts = categoryCountsByChannel.get(video.channelId) ?? new Map<string, number>();
+      counts.set(video.category, (counts.get(video.category) ?? 0) + 1);
+      categoryCountsByChannel.set(video.channelId, counts);
+    }
+
+    const categoryEntries = [...categoryCountsByChannel.entries()].flatMap(
+      ([channelId, counts]) => {
+        const [category] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+        return category ? [{ channelId, category }] : [];
+      },
+    );
+    await Promise.all(
+      categoryEntries.map((entry) => upsertChannelCategory(entry.channelId, entry.category)),
+    );
 
     // Compute trend per channel using cached+fresh videos for each channel.
     const uniqueChannelIds = [...new Set(results.map((video) => video.channelId))];

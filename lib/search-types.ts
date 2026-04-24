@@ -25,6 +25,9 @@ export interface EnrichedVideo {
   outlierScore: number;
   outlierReason: string;
   channelTrend?: ChannelTrend | null;
+  category?: string;
+  rpmUsd?: number;
+  estimatedRevenueUsd?: number;
 }
 
 export interface SearchAndEnrichResult {

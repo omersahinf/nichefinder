@@ -40,6 +40,13 @@ const daysAgo = (iso: string): string => {
   return `${Math.floor(d / 365)}y ago`;
 };
 
+const fmtUsd = (n: number): string =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
+
 const DAYS_OPTIONS: Array<{ label: string; value: number }> = [
   { label: "All time", value: 0 },
   { label: "Last 7 days", value: 7 },
@@ -69,6 +76,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [quota, setQuota] = useState<QuotaUsage | null>(null);
+  const [showRevenue, setShowRevenue] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -285,6 +293,16 @@ export default function Home() {
               </select>
             </div>
           </div>
+
+          <label className="mt-4 inline-flex items-center gap-2 text-sm text-neutral-300">
+            <input
+              type="checkbox"
+              checked={showRevenue}
+              onChange={(event) => setShowRevenue(event.target.checked)}
+              className="h-4 w-4 rounded border-neutral-700 bg-neutral-950 accent-red-600"
+            />
+            Show revenue
+          </label>
         </div>
 
         {error && (
@@ -386,12 +404,14 @@ export default function Home() {
             </div>
 
             <div className="overflow-x-auto rounded-lg border border-neutral-800">
-              <table className="min-w-[1100px] w-full text-sm">
+              <table className="min-w-[1200px] w-full text-sm">
                 <thead className="bg-neutral-900 text-left text-xs uppercase tracking-wider text-neutral-400">
                   <tr>
                     <th className="px-4 py-3">Video</th>
                     <th className="px-4 py-3 text-right">Views</th>
                     <th className="px-4 py-3 text-right">Outlier</th>
+                    <th className="px-4 py-3">Category</th>
+                    {showRevenue && <th className="px-4 py-3 text-right">Est. revenue</th>}
                     <th className="px-4 py-3">Reason</th>
                     <th className="px-4 py-3 text-right">Channel Subs</th>
                     <th className="px-4 py-3 text-right">Trend</th>
@@ -456,6 +476,22 @@ export default function Home() {
                           {r.outlierScore.toFixed(1)}x
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        {r.category ? (
+                          <span className="inline-flex rounded bg-neutral-800 px-2 py-1 text-xs font-medium capitalize text-neutral-200">
+                            {r.category}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-neutral-600">-</span>
+                        )}
+                      </td>
+                      {showRevenue && (
+                        <td className="px-4 py-3 text-right font-mono text-neutral-300">
+                          {typeof r.estimatedRevenueUsd === "number"
+                            ? fmtUsd(r.estimatedRevenueUsd)
+                            : "-"}
+                        </td>
+                      )}
                       <td className="max-w-[220px] px-4 py-3 text-neutral-300">
                         {r.outlierReason}
                       </td>

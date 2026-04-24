@@ -4,6 +4,7 @@ import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase";
 import { normalizeKeyword } from "./niche-utils";
 import type { EnrichedVideo, QuotaUsage, SearchSource } from "./search-types";
 import type { ChannelTrend, VideoSample } from "./trend";
+import { estimateRevenue, type VideoCategory } from "./rpm";
 
 const CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
 const VIDEO_TTL_MS = 12 * 60 * 60 * 1000;
@@ -58,6 +59,7 @@ interface ChannelRow {
   video_count: number | string | null;
   country: string | null;
   created_at: string | null;
+  category: string | null;
   thumbnail_url: string | null;
   fetched_at: string | null;
   trend_growth_30d?: number | string | null;
@@ -314,6 +316,50 @@ export async function upsertChannelTrends(
   }
 }
 
+export async function upsertChannelCategory(
+  channelId: string,
+  category: string,
+): Promise<void> {
+  const client = getSupabaseAdmin();
+  if (!client || !channelId || !category) return;
+
+  try {
+    const { error } = await client
+      .from("channels")
+      .update({ category })
+      .eq("youtube_id", channelId);
+    if (error) throw error;
+  } catch (error) {
+    console.warn("[cache] channel category upsert skipped", error);
+  }
+}
+
+export async function getCachedChannelCategories(
+  channelIds: string[],
+): Promise<Map<string, string>> {
+  const client = getSupabaseAdmin();
+  const unique = [...new Set(channelIds)].filter(Boolean);
+  const result = new Map<string, string>();
+  if (!client || unique.length === 0) return result;
+
+  try {
+    const { data, error } = await client
+      .from("channels")
+      .select("youtube_id,category")
+      .in("youtube_id", unique);
+
+    if (error) throw error;
+
+    for (const row of (data ?? []) as ChannelRow[]) {
+      if (row.category) result.set(row.youtube_id, row.category);
+    }
+  } catch (error) {
+    console.warn("[cache] channel category read skipped", error);
+  }
+
+  return result;
+}
+
 export async function getCachedChannelTrends(
   channelIds: string[],
 ): Promise<Map<string, ChannelTrend>> {
@@ -418,7 +464,7 @@ export async function listSeedChannels(limit = 100): Promise<SeedChannel[]> {
   const { data: channelData, error: channelError } = await client
     .from("channels")
     .select(
-      "youtube_id,title,description,subs,total_views,video_count,country,created_at,thumbnail_url,fetched_at",
+      "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,thumbnail_url,fetched_at",
     )
     .in("youtube_id", channelIds);
 
@@ -573,9 +619,15 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
       outlierScore,
     };
 
+    const category = channel.category as VideoCategory | null;
+    const revenue = category ? estimateRevenue(views, category) : null;
+
     resultMap.set(row.youtube_id, {
       ...video,
       outlierReason: row.outlier_reason || getOutlierReason(video),
+      category: revenue?.category ?? channel.category ?? undefined,
+      rpmUsd: revenue?.rpmUsd,
+      estimatedRevenueUsd: revenue?.estimatedRevenueUsd,
     });
   }
 

@@ -16,6 +16,13 @@ const fmt = (n: number): string => {
   return String(Math.round(n));
 };
 
+const fmtUsd = (n: number): string =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
+
 const daysAgo = (iso: string): string => {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
   if (d === 0) return "today";
@@ -53,6 +60,19 @@ export default async function NichePage({ params, searchParams }: NichePageProps
   const topChannels = Array.from(channelMap.values())
     .sort((a, b) => b.bestOutlier - a.bestOutlier)
     .slice(0, 10);
+
+  const topVideos = [...results].sort((a, b) => b.outlierScore - a.outlierScore).slice(0, 10);
+  const totalEstimatedRevenue = topVideos.reduce(
+    (sum, video) => sum + (video.estimatedRevenueUsd ?? 0),
+    0,
+  );
+  const categoryDistribution = Array.from(
+    results.reduce((map, video) => {
+      const category = video.category ?? "other";
+      map.set(category, (map.get(category) ?? 0) + 1);
+      return map;
+    }, new Map<string, number>()),
+  ).sort((a, b) => b[1] - a[1]);
 
   const timeline = [...results]
     .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
@@ -182,6 +202,31 @@ export default async function NichePage({ params, searchParams }: NichePageProps
                         {fmt(channel.subs)} subs
                       </div>
                     </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-5 lg:col-span-2">
+              <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Category distribution</h2>
+                  <p className="mt-1 text-sm text-neutral-400">
+                    Estimated revenue across top 10 videos:{" "}
+                    <span className="font-mono text-neutral-200">
+                      {fmtUsd(totalEstimatedRevenue)}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                {categoryDistribution.map(([category, count]) => (
+                  <div key={category} className="rounded border border-neutral-800 bg-neutral-950/50 p-3">
+                    <div className="text-xs uppercase tracking-wider text-neutral-500">
+                      {category}
+                    </div>
+                    <div className="mt-1 font-mono text-xl">{count}</div>
                   </div>
                 ))}
               </div>
