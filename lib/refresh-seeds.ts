@@ -19,6 +19,8 @@ import { getChannelStats, getVideoStats } from "./youtube";
 import type { ChannelStats, VideoStats } from "./youtube";
 import type { EnrichedVideo } from "./search-types";
 import type { ChannelTrend } from "./trend";
+import { matchAlerts, markAlertNotified } from "./alerts";
+import { sendAlertEmail } from "./email";
 
 export interface RefreshSeedsOptions {
   channelIds?: string[];
@@ -31,6 +33,8 @@ export interface RefreshSeedsResult {
   newVideos: number;
   refreshedChannels: number;
   units: number;
+  alertMatches?: number;
+  emailsSent?: number;
 }
 
 interface RssVideoRef {
@@ -196,6 +200,15 @@ export async function refreshSeedChannels(
   await upsertChannelTrends(trends);
   await markSeedChannelsCrawled(seedIds);
 
+  const alertMatches = await matchAlerts(videos);
+  let emailsSent = 0;
+  for (const match of alertMatches) {
+    if (await sendAlertEmail(match.alert.email, match.matches)) {
+      emailsSent += 1;
+      await markAlertNotified(match.alert.id);
+    }
+  }
+
   const units = youtubeBatchUnits(newIds.length) + youtubeBatchUnits(seedIds.length);
   await recordApiUsage(
     units,
@@ -203,6 +216,8 @@ export async function refreshSeedChannels(
       job: "refresh-seeds",
       seeds: seedChannels.length,
       newVideos: videos.length,
+      alertMatches: alertMatches.reduce((sum, match) => sum + match.matches.length, 0),
+      emailsSent,
     },
     options.usageSource ?? "cron",
   );
@@ -212,5 +227,7 @@ export async function refreshSeedChannels(
     newVideos: videos.length,
     refreshedChannels: channelsWithMonetization.length,
     units,
+    alertMatches: alertMatches.reduce((sum, match) => sum + match.matches.length, 0),
+    emailsSent,
   };
 }
