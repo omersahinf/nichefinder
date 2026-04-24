@@ -80,6 +80,7 @@ export default function Home() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [quota, setQuota] = useState<QuotaUsage | null>(null);
   const [showRevenue, setShowRevenue] = useState(false);
+  const [staleCache, setStaleCache] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,8 +99,8 @@ export default function Home() {
     };
   }, []);
 
-  const search = async (e: React.FormEvent): Promise<void> => {
-    e.preventDefault();
+  const search = async (e?: React.FormEvent, forceRefresh = false): Promise<void> => {
+    e?.preventDefault();
     if (!q.trim()) return;
     setLoading(true);
     setError(null);
@@ -109,6 +110,7 @@ export default function Home() {
         max: "50",
       });
       if (filters.days > 0) params.set("days", String(filters.days));
+      if (forceRefresh) params.set("force", "1");
       const res = await fetch(`/api/search?${params}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "search failed");
@@ -117,6 +119,11 @@ export default function Home() {
       setSource(data.source ?? null);
       setFallbackReason(data.fallbackReason ?? null);
       setQuota(data.quota ?? null);
+      setStaleCache(
+        data.source === "cache" &&
+          data.fetchedAt &&
+          Date.now() - new Date(data.fetchedAt).getTime() > 12 * 60 * 60 * 1000,
+      );
       setLastQuery(q.trim());
     } catch (err) {
       setError(err instanceof Error ? err.message : "error");
@@ -124,6 +131,7 @@ export default function Home() {
       setSaturation(null);
       setSource(null);
       setFallbackReason(null);
+      setStaleCache(false);
     } finally {
       setLoading(false);
     }
@@ -185,7 +193,7 @@ export default function Home() {
           </div>
         </header>
 
-        <form onSubmit={search} className="mb-6 flex gap-3">
+        <form onSubmit={(event) => void search(event)} className="mb-6 flex gap-3">
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -349,6 +357,20 @@ export default function Home() {
                 <div className="text-xs text-amber-200/80">Reason: {fallbackReason}</div>
               )}
             </div>
+          </div>
+        )}
+
+        {staleCache && (
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-amber-900 bg-amber-950/30 px-4 py-3 text-sm text-amber-100 md:flex-row md:items-center md:justify-between">
+            <div>Cached 12h+ ago — refresh?</div>
+            <button
+              type="button"
+              onClick={() => void search(undefined, true)}
+              disabled={loading}
+              className="w-fit rounded bg-amber-500 px-3 py-1.5 text-xs font-semibold text-neutral-950 hover:bg-amber-400 disabled:opacity-50"
+            >
+              Refresh
+            </button>
           </div>
         )}
 

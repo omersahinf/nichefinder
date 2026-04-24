@@ -135,6 +135,7 @@ type SearchAndEnrichOptions = {
   publishedAfter?: string;
   days?: number;
   forceMock?: boolean;
+  forceRefresh?: boolean;
 };
 
 async function fetchYoutubeJson<TItem>(
@@ -284,14 +285,14 @@ export async function searchAndEnrich(
     publishedAfter: options.publishedAfter,
   };
 
-  const cachedResults = await getCachedSearch(cacheOptions);
-  if (cachedResults) {
-    const cachedChannelIds = [...new Set(cachedResults.map((video) => video.channelId))];
+  const cachedSearch = options.forceRefresh ? null : await getCachedSearch(cacheOptions);
+  if (cachedSearch) {
+    const cachedChannelIds = [...new Set(cachedSearch.results.map((video) => video.channelId))];
     const [trendMap, categoryMap] = await Promise.all([
       getCachedChannelTrends(cachedChannelIds),
       getCachedChannelCategories(cachedChannelIds),
     ]);
-    const withTrend = cachedResults.map((video) => {
+    const withTrend = cachedSearch.results.map((video) => {
       const category = video.category ?? categoryMap.get(video.channelId);
       const revenue = category
         ? estimateRevenue(video.views, category as VideoCategory)
@@ -317,6 +318,7 @@ export async function searchAndEnrich(
       source: "cache",
       cacheHit: true,
       quotaUnits: 0,
+      fetchedAt: cachedSearch.fetchedAt,
     };
   }
 
@@ -326,6 +328,7 @@ export async function searchAndEnrich(
       source: "mock",
       fallbackReason: "Daily YouTube quota guard active",
       quotaUnits: 0,
+      fetchedAt: new Date().toISOString(),
     };
   }
 
@@ -335,6 +338,7 @@ export async function searchAndEnrich(
       source: "mock",
       fallbackReason: "YOUTUBE_API_KEY missing",
       quotaUnits: 0,
+      fetchedAt: new Date().toISOString(),
     };
   }
 
@@ -348,7 +352,7 @@ export async function searchAndEnrich(
 
     if (videos.length === 0) {
       await writeSearchCache(cacheOptions, [], "youtube");
-      return { results: [], source: "youtube", quotaUnits };
+      return { results: [], source: "youtube", quotaUnits, fetchedAt: new Date().toISOString() };
     }
 
     const videoIds = videos.map((video) => video.id);
@@ -511,7 +515,12 @@ export async function searchAndEnrich(
       "user_search",
     );
 
-    return { results: resultsWithTrend, source: "youtube", quotaUnits };
+    return {
+      results: resultsWithTrend,
+      source: "youtube",
+      quotaUnits,
+      fetchedAt: new Date().toISOString(),
+    };
   } catch (error) {
     const fallbackReason =
       error instanceof Error ? error.message : "Unknown YouTube API error";
@@ -521,6 +530,7 @@ export async function searchAndEnrich(
       source: "mock",
       fallbackReason,
       quotaUnits: 0,
+      fetchedAt: new Date().toISOString(),
     };
   }
 }

@@ -37,6 +37,7 @@ export interface SearchAndEnrichResult {
   fallbackReason?: string;
   cacheHit?: boolean;
   quotaUnits?: number;
+  fetchedAt?: string;
 }
 
 export interface QuotaUsage {

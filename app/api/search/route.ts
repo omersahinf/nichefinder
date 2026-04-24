@@ -16,6 +16,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     : 25;
   const requestedDays = Number(req.nextUrl.searchParams.get("days") ?? 0);
   const days = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : 0;
+  const forceRefresh = req.nextUrl.searchParams.get("force") === "1";
 
   if (!q) {
     return NextResponse.json({ error: "query required" }, { status: 400 });
@@ -28,11 +29,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   try {
     const quotaBefore = await getTodayQuotaUsage();
-    const { results, source, fallbackReason, cacheHit, quotaUnits = 0 } =
+    const { results, source, fallbackReason, cacheHit, quotaUnits = 0, fetchedAt } =
       await searchAndEnrich(q, maxResults, {
         publishedAfter,
         days,
         forceMock: isQuotaGuardActive(quotaBefore),
+        forceRefresh,
       });
 
     await recordApiUsage(quotaUnits, {
@@ -43,7 +45,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
     await logSearch(
       q,
-      { maxResults, days, publishedAfter: publishedAfter ?? null },
+      { maxResults, days, publishedAfter: publishedAfter ?? null, forceRefresh },
       results.length,
       { source, fallbackReason, quotaUnits },
     );
@@ -59,6 +61,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       cacheHit,
       quotaUnits,
       quota,
+      fetchedAt,
       results,
       saturation,
     });

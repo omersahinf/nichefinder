@@ -685,7 +685,7 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
 
 export async function getCachedSearch(
   opts: SearchCacheOptions,
-): Promise<EnrichedVideo[] | null> {
+): Promise<{ results: EnrichedVideo[]; fetchedAt: string } | null> {
   const client = getSupabaseAdmin();
   if (!client) return null;
 
@@ -711,7 +711,10 @@ export async function getCachedSearch(
         )
       : hydrated;
 
-    return filtered.slice(0, opts.maxResults);
+    return {
+      results: filtered.slice(0, opts.maxResults),
+      fetchedAt: row.fetched_at ?? "",
+    };
   } catch (error) {
     console.warn("[cache] search lookup skipped", error);
     return null;
