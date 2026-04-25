@@ -15,6 +15,14 @@
     {
       "path": "/api/cron/keyword-ai",
       "schedule": "0 6 * * 0"
+    },
+    {
+      "path": "/api/cron/grow-discover",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/grow-tune",
+      "schedule": "0 6 * * *"
     }
   ]
 }

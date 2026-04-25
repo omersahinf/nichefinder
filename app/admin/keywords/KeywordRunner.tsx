@@ -34,7 +34,10 @@ interface RunnerResponse {
   channelsDiscovered?: number;
   unitsUsed?: number;
   stoppedReason?: string;
-  results?: Record<string, { candidatesFound?: number; candidatesAdded?: number }>;
+  results?: Record<
+    string,
+    { candidatesFound?: number; candidatesAdded?: number; error?: string }
+  >;
   candidatesFound?: number;
   candidatesAdded?: number;
   metadata?: Record<string, unknown>;
@@ -42,6 +45,19 @@ interface RunnerResponse {
 }
 
 type EnabledFilter = "" | "true" | "false";
+
+interface PatternListResponse {
+  patterns?: Array<{
+    pattern: string;
+    pattern_type: string;
+    score: number;
+    velocity_score: number;
+    video_count: number;
+    channel_count: number;
+    slot_count: number;
+  }>;
+  error?: string;
+}
 
 const fmtDate = (value: string | null): string => {
   if (!value) return "-";
@@ -64,7 +80,9 @@ const formatResult = (data: RunnerResponse): string => {
     return Object.entries(data.results)
       .map(
         ([job, result]) =>
-          `${job}: ${result.candidatesAdded ?? 0}/${result.candidatesFound ?? 0}`,
+          result.error
+            ? `${job}: ${result.error}`
+            : `${job}: ${result.candidatesAdded ?? 0}/${result.candidatesFound ?? 0}`,
       )
       .join(" | ");
   }
@@ -75,6 +93,8 @@ const sourceClass = (source: string): string => {
   if (source === "manual") return "border-blue-900 bg-blue-950/60 text-blue-100";
   if (source === "trend") return "border-amber-900 bg-amber-950/60 text-amber-100";
   if (source === "ai_generated") return "border-fuchsia-900 bg-fuchsia-950/60 text-fuchsia-100";
+  if (source === "ai_vertical") return "border-fuchsia-900 bg-fuchsia-950/60 text-fuchsia-100";
+  if (source === "ai_slot") return "border-violet-900 bg-violet-950/60 text-violet-100";
   if (source === "variation") return "border-emerald-900 bg-emerald-950/60 text-emerald-100";
   return "border-neutral-700 bg-neutral-900 text-neutral-200";
 };
@@ -142,6 +162,28 @@ export default function KeywordRunner({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
       setStatus(null);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const viewPatterns = async (): Promise<void> => {
+    setBusy("patterns");
+    setError(null);
+    try {
+      const response = await fetch("/api/admin/grow");
+      const data = (await response.json()) as PatternListResponse;
+      if (!response.ok) throw new Error(data.error ?? "Unable to load patterns");
+      const summary = (data.patterns ?? [])
+        .slice(0, 8)
+        .map(
+          (pattern) =>
+            `${pattern.pattern} (${pattern.video_count} videos, ${pattern.channel_count} channels)`,
+        )
+        .join(" | ");
+      setStatus(summary || "No title patterns found yet.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load patterns");
     } finally {
       setBusy(null);
     }
@@ -240,7 +282,7 @@ export default function KeywordRunner({
           </button>
         </form>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:flex">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:flex lg:flex-wrap">
           <input
             type="number"
             min={1}
@@ -277,6 +319,22 @@ export default function KeywordRunner({
           >
             Run AI generator
           </button>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void runJob("Growth", "/api/admin/grow", { mode: "discover" })}
+            className="rounded-lg bg-neutral-800 px-3 py-2 text-sm font-medium hover:bg-neutral-700 disabled:opacity-50"
+          >
+            Run growth
+          </button>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void viewPatterns()}
+            className="rounded-lg bg-neutral-800 px-3 py-2 text-sm font-medium hover:bg-neutral-700 disabled:opacity-50"
+          >
+            View patterns
+          </button>
         </div>
       </section>
 
@@ -310,6 +368,8 @@ export default function KeywordRunner({
             <option value="variation">Variation</option>
             <option value="trend">Trend</option>
             <option value="ai_generated">AI generated</option>
+            <option value="ai_vertical">AI vertical</option>
+            <option value="ai_slot">AI slot</option>
           </select>
           <select
             value={enabled}
