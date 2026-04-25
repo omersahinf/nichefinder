@@ -139,7 +139,7 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
     system:
       "You fill viral YouTube title pattern slots with high-discovery sub-niches. Return JSON only.",
     user: JSON.stringify({
-      task: "For each pattern, generate search keywords that preserve the viral format but diversify topics. Return {\"keywords\":[{\"keyword\":\"...\",\"source_pattern\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]} only.",
+      task: "For each pattern, generate up to 180 search keywords that preserve the viral format but diversify topics. Return {\"keywords\":[{\"keyword\":\"...\",\"source_pattern\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]} only.",
       constraints: [
         "Avoid repeats.",
         "Prefer specific slots like dinosaur species, professions, historical roles, animals, diseases, disasters, vehicles, scams, survival scenarios.",
@@ -156,7 +156,7 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
   });
 
   const candidates = parseCandidates(ai.data).filter((candidate) => !existing.has(candidate.keyword));
-  const rowsToInsert = candidates.slice(0, 80).map((candidate) => ({
+  const rowsToInsert = candidates.slice(0, 180).map((candidate) => ({
     keyword: candidate.keyword,
     category: candidate.category,
     priority: candidate.priority,

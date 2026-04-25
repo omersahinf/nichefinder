@@ -220,7 +220,7 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
     system:
       "You are a YouTube niche discovery strategist. Return JSON only. Favor diverse, non-obvious evergreen niches and avoid simple suffix variations.",
     user: JSON.stringify({
-      task: "Suggest 60 fresh YouTube search keywords that broaden the database into new verticals. Return {\"keywords\":[{\"keyword\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]} only.",
+      task: "Suggest 180 fresh YouTube search keywords that broaden the database into new verticals. Return {\"keywords\":[{\"keyword\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]} only.",
       constraints: [
         "Do not repeat existing keywords.",
         "Avoid trivial variants like tutorial, shorts, best 2026 unless the topic itself is new.",
@@ -245,7 +245,7 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
   });
 
   const candidates = parseCandidates(ai.data).filter((candidate) => !existing.has(candidate.keyword));
-  const rowsToInsert = candidates.slice(0, 60).map((candidate) => ({
+  const rowsToInsert = candidates.slice(0, 180).map((candidate) => ({
     keyword: candidate.keyword,
     category: candidate.category,
     priority: candidate.priority,
