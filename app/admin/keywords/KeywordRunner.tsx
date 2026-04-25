@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export interface KeywordRow {
   id: string;
@@ -56,6 +56,8 @@ interface PatternListResponse {
     channel_count: number;
     slot_count: number;
   }>;
+  today_ai_cost_usd?: number;
+  today_ai_shadow_cost_usd?: number;
   error?: string;
 }
 
@@ -89,6 +91,8 @@ const formatResult = (data: RunnerResponse): string => {
   return `${data.candidatesAdded ?? 0}/${data.candidatesFound ?? 0} added`;
 };
 
+const fmtUsd = (value: number): string => `$${value.toFixed(4)}`;
+
 const sourceClass = (source: string): string => {
   if (source === "manual") return "border-blue-900 bg-blue-950/60 text-blue-100";
   if (source === "trend") return "border-amber-900 bg-amber-950/60 text-amber-100";
@@ -117,6 +121,8 @@ export default function KeywordRunner({
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [todayAiCostUsd, setTodayAiCostUsd] = useState(0);
+  const [todayAiShadowCostUsd, setTodayAiShadowCostUsd] = useState(0);
 
   const categories = useMemo(
     () =>
@@ -140,6 +146,41 @@ export default function KeywordRunner({
     [enabled, source],
   );
 
+  const fetchGrowthStatus = useCallback(async (): Promise<PatternListResponse> => {
+    const response = await fetch("/api/admin/grow");
+    const data = (await response.json()) as PatternListResponse;
+    if (!response.ok) throw new Error(data.error ?? "Unable to load growth status");
+    return data;
+  }, []);
+
+  const refreshGrowthStatus = useCallback(async (): Promise<PatternListResponse> => {
+    const data = await fetchGrowthStatus();
+    setTodayAiCostUsd(Number(data.today_ai_cost_usd ?? 0));
+    setTodayAiShadowCostUsd(Number(data.today_ai_shadow_cost_usd ?? 0));
+    return data;
+  }, [fetchGrowthStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchGrowthStatus()
+      .then((data) => {
+        if (cancelled) return;
+        setTodayAiCostUsd(Number(data.today_ai_cost_usd ?? 0));
+        setTodayAiShadowCostUsd(Number(data.today_ai_shadow_cost_usd ?? 0));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTodayAiCostUsd(0);
+          setTodayAiShadowCostUsd(0);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchGrowthStatus]);
+
   const runJob = async (
     label: string,
     path: string,
@@ -159,6 +200,7 @@ export default function KeywordRunner({
       if (!response.ok) throw new Error(data.error ?? `${label} failed`);
       setStatus(`${label}: ${formatResult(data)}`);
       await refreshKeywords();
+      await refreshGrowthStatus();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
       setStatus(null);
@@ -171,9 +213,7 @@ export default function KeywordRunner({
     setBusy("patterns");
     setError(null);
     try {
-      const response = await fetch("/api/admin/grow");
-      const data = (await response.json()) as PatternListResponse;
-      if (!response.ok) throw new Error(data.error ?? "Unable to load patterns");
+      const data = await refreshGrowthStatus();
       const summary = (data.patterns ?? [])
         .slice(0, 8)
         .map(
@@ -251,6 +291,18 @@ export default function KeywordRunner({
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-neutral-400">Growth orchestrator</div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-300">
+            AI cost today: {fmtUsd(todayAiCostUsd)}
+          </span>
+          <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-300">
+            shadow: {fmtUsd(todayAiShadowCostUsd)}
+          </span>
+        </div>
+      </div>
+
       <section className="grid gap-3 rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 lg:grid-cols-[1fr_auto]">
         <form onSubmit={addKeyword} className="grid gap-3 md:grid-cols-[1fr_160px_110px_auto]">
           <input

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminApi } from "@/lib/admin-guard";
 import { runAiPatternSlotFiller } from "@/lib/ai-pattern-slot-filler";
 import { runAiVerticalStrategist } from "@/lib/ai-vertical-strategist";
+import { getTodayAiCostUsd, getTodayShadowCostUsd } from "@/lib/budget-cap";
 import { runGraphCrawler } from "@/lib/graph-crawler";
 import { runKeywordExtraction } from "@/lib/keyword-extraction";
 import { runKeywordTrends } from "@/lib/keyword-trends";
@@ -91,13 +92,23 @@ export async function GET(): Promise<NextResponse> {
   }
 
   try {
-    const { data, error } = await client
-      .from("title_patterns")
-      .select("id,pattern,pattern_type,score,velocity_score,video_count,channel_count,slot_count,last_seen_at,metadata")
-      .order("score", { ascending: false })
-      .limit(25);
+    const [{ data, error }, todayAiCostUsd, todayAiShadowCostUsd] = await Promise.all([
+      client
+        .from("title_patterns")
+        .select(
+          "id,pattern,pattern_type,score,velocity_score,video_count,channel_count,slot_count,last_seen_at,metadata",
+        )
+        .order("score", { ascending: false })
+        .limit(25),
+      getTodayAiCostUsd(),
+      getTodayShadowCostUsd(),
+    ]);
     if (error) throw error;
-    return NextResponse.json({ patterns: data ?? [] });
+    return NextResponse.json({
+      patterns: data ?? [],
+      today_ai_cost_usd: todayAiCostUsd,
+      today_ai_shadow_cost_usd: todayAiShadowCostUsd,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load patterns";
     return NextResponse.json({ error: message }, { status: 500 });
