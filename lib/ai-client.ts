@@ -49,6 +49,75 @@ export function aiConfig(): { provider: string; apiKey?: string; baseUrl: string
   };
 }
 
+function parseCompletedKeywordObjects(jsonLike: string): unknown | null {
+  const keywordIndex = jsonLike.indexOf('"keywords"');
+  if (keywordIndex < 0) return null;
+
+  const arrayStart = jsonLike.indexOf("[", keywordIndex);
+  if (arrayStart < 0) return null;
+
+  const objects: unknown[] = [];
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+  let objectStart = -1;
+
+  for (let index = arrayStart + 1; index < jsonLike.length; index += 1) {
+    const char = jsonLike[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === "{") {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        const objectText = jsonLike.slice(objectStart, index + 1);
+        try {
+          objects.push(JSON.parse(objectText) as unknown);
+        } catch {
+          // Skip malformed partial objects and keep any completed ones.
+        }
+        objectStart = -1;
+      }
+    }
+  }
+
+  return objects.length > 0 ? { keywords: objects } : null;
+}
+
+function parseJsonWithFallback(jsonText: string): unknown {
+  try {
+    return JSON.parse(jsonText) as unknown;
+  } catch (error) {
+    const commaRepaired = jsonText
+      .replace(/}\s*{/g, "},{")
+      .replace(/,\s*([}\]])/g, "$1");
+    try {
+      return JSON.parse(commaRepaired) as unknown;
+    } catch {
+      const completedKeywords = parseCompletedKeywordObjects(jsonText);
+      if (completedKeywords) return completedKeywords;
+      throw error;
+    }
+  }
+}
+
 function extractJson(text: string): unknown {
   const trimmed = text
     .trim()
@@ -63,7 +132,7 @@ function extractJson(text: string): unknown {
   if (start < 0 || end <= start) {
     throw new Error("AI response did not include JSON");
   }
-  return JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+  return parseJsonWithFallback(trimmed.slice(start, end + 1));
 }
 
 function normalizeBaseUrl(baseUrl: string): string {

@@ -213,19 +213,21 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
 
   const ai = await generateAiJson<AiVerticalResponse>({
     job: "ai:vertical-strategist",
-    maxTokens: 4096,
+    maxTokens: 8192,
     temperature: 0.85,
     estimatedUsd: 0.02,
     extraBody: { extra_body: { enable_thinking: true } },
     system:
       "You are a YouTube niche discovery strategist. Return JSON only. Favor diverse, non-obvious evergreen niches and avoid simple suffix variations.",
     user: JSON.stringify({
-      task: "Suggest 180 fresh YouTube search keywords that broaden the database into new verticals. Return {\"keywords\":[{\"keyword\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]} only.",
+      task: "Suggest 180 fresh YouTube search keywords that broaden the database into new verticals. Return compact valid JSON only: {\"keywords\":[{\"keyword\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]}.",
       constraints: [
         "Do not repeat existing keywords.",
         "Avoid trivial variants like tutorial, shorts, best 2026 unless the topic itself is new.",
         "Prefer TubeLab-style discoverable niches and sub-niches.",
         "Use English keyword copy.",
+        "Keep each reason under 8 words.",
+        "Return a complete valid JSON object with no markdown.",
       ],
       verticalLibrarySize: VERTICALS.length * INTENTS.length,
       verticals: VERTICALS,

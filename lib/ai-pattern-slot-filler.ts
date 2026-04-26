@@ -132,19 +132,21 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
 
   const ai = await generateAiJson<AiSlotResponse>({
     job: "ai:pattern-slot-filler",
-    maxTokens: 4096,
+    maxTokens: 8192,
     temperature: 0.8,
     estimatedUsd: 0.02,
     extraBody: { extra_body: { enable_thinking: true } },
     system:
       "You fill viral YouTube title pattern slots with high-discovery sub-niches. Return JSON only.",
     user: JSON.stringify({
-      task: "For each pattern, generate up to 180 search keywords that preserve the viral format but diversify topics. Return {\"keywords\":[{\"keyword\":\"...\",\"source_pattern\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]} only.",
+      task: "For each pattern, generate up to 180 search keywords that preserve the viral format but diversify topics. Return compact valid JSON only: {\"keywords\":[{\"keyword\":\"...\",\"source_pattern\":\"...\",\"category\":\"...\",\"priority\":50,\"reason\":\"...\"}]}.",
       constraints: [
         "Avoid repeats.",
         "Prefer specific slots like dinosaur species, professions, historical roles, animals, diseases, disasters, vehicles, scams, survival scenarios.",
         "Keywords should be usable as YouTube search queries.",
         "English only.",
+        "Keep each reason under 8 words.",
+        "Return a complete valid JSON object with no markdown.",
       ],
       patterns: patterns.map((row) => ({
         pattern: row.pattern,
