@@ -102,6 +102,36 @@ const INTENTS = [
   "survival guide",
 ];
 
+const BLOCKED_KEYWORD_PARTS = [
+  "nba",
+  "nfl",
+  "mlb",
+  "nhl",
+  "ufc",
+  "live score",
+  "match highlights",
+  "election",
+  "polls",
+  "weather",
+  "lottery",
+  "stock price",
+  "crypto price",
+  "breaking news",
+  "celebrity gossip",
+  "red carpet",
+];
+
+const TRIVIAL_SUFFIXES = [
+  "tutorial",
+  "shorts",
+  "best",
+  "tips",
+  "guide",
+  "explained",
+  "for beginners",
+  "2026",
+];
+
 async function logDiscovery(
   job: string,
   candidatesFound: number,
@@ -156,6 +186,32 @@ function parseCandidates(response: AiVerticalResponse): Array<{
       },
     ];
   });
+}
+
+function withoutTrivialSuffix(keyword: string): string {
+  let value = keyword;
+  for (const suffix of TRIVIAL_SUFFIXES) {
+    value = value.replace(new RegExp(`\\b${suffix.replace(/\s+/g, "\\s+")}\\b$`, "i"), "");
+  }
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function isUsefulCandidate(
+  candidate: { keyword: string; category: string | null },
+  existing: Set<string>,
+): boolean {
+  const keyword = candidate.keyword;
+  if (BLOCKED_KEYWORD_PARTS.some((part) => keyword.includes(part))) return false;
+  if (keyword.length < 3 || /^\d+$/.test(keyword)) return false;
+  if (keyword.split(" ").length === 1 && keyword.length < 5) return false;
+
+  const root = withoutTrivialSuffix(keyword);
+  if (root && root !== keyword && existing.has(root)) return false;
+
+  const mostlyYearOrModifier = /^(best|top|new|latest)\s+\d{4}$/.test(keyword);
+  if (mostlyYearOrModifier) return false;
+
+  return true;
 }
 
 export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult> {
@@ -224,6 +280,8 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
       constraints: [
         "Do not repeat existing keywords.",
         "Avoid trivial variants like tutorial, shorts, best 2026 unless the topic itself is new.",
+        "Avoid sports scores, celebrity gossip, politics, breaking news, weather, and price-tracking terms.",
+        "Prefer evergreen documentary, explainer, buyer-risk, health, history, survival, true-crime, hobby, and weird-skill angles.",
         "Prefer TubeLab-style discoverable niches and sub-niches.",
         "Use English keyword copy.",
         "Keep each reason under 8 words.",
@@ -246,7 +304,9 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
     }),
   });
 
-  const candidates = parseCandidates(ai.data).filter((candidate) => !existing.has(candidate.keyword));
+  const candidates = parseCandidates(ai.data).filter(
+    (candidate) => !existing.has(candidate.keyword) && isUsefulCandidate(candidate, existing),
+  );
   const rowsToInsert = candidates.slice(0, 180).map((candidate) => ({
     keyword: candidate.keyword,
     category: candidate.category,

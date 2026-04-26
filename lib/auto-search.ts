@@ -15,6 +15,8 @@ export type AutoSearchStopReason =
 export interface AutoSearchKeywordResult {
   id: string;
   keyword: string;
+  keywordSource: string;
+  queueScore: number;
   channelsDiscovered: number;
   unitsUsed: number;
   source: string;
@@ -35,11 +37,13 @@ interface SeedKeywordRow {
   keyword: string;
   priority: number | string | null;
   enabled: boolean | null;
+  source: string | null;
   expires_at: string | null;
   last_searched_at: string | null;
   total_runs: number | string | null;
   total_channels_added: number | string | null;
   unique_channels_added: number | string | null;
+  created_at: string | null;
 }
 
 const shouldStopForQuota = async (): Promise<boolean> => {
@@ -60,18 +64,61 @@ async function listRunnableKeywords(maxKeywords: number): Promise<SeedKeywordRow
   const { data, error } = await client
     .from("seed_keywords")
     .select(
-      "id,keyword,priority,enabled,expires_at,last_searched_at,total_runs,total_channels_added,unique_channels_added",
+      "id,keyword,priority,enabled,source,expires_at,last_searched_at,total_runs,total_channels_added,unique_channels_added,created_at",
     )
     .eq("enabled", true)
     .order("last_searched_at", { ascending: true, nullsFirst: true })
     .order("priority", { ascending: false })
-    .limit(Math.max(maxKeywords * 3, maxKeywords));
+    .limit(Math.max(maxKeywords * 8, maxKeywords));
 
   if (error) throw error;
 
   return ((data ?? []) as SeedKeywordRow[])
     .filter((row) => !row.expires_at || new Date(row.expires_at).getTime() > now)
+    .sort((a, b) => smartQueueScore(b) - smartQueueScore(a) || a.keyword.localeCompare(b.keyword))
     .slice(0, maxKeywords);
+}
+
+function daysSince(value: string | null): number {
+  if (!value) return 999;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 999;
+  return Math.max(0, (Date.now() - timestamp) / 86_400_000);
+}
+
+function smartQueueScore(row: SeedKeywordRow): number {
+  const runs = Number(row.total_runs ?? 0);
+  const channels = Number(row.total_channels_added ?? 0);
+  const uniqueChannels = Number(row.unique_channels_added ?? channels);
+  const priority = Number(row.priority ?? 50);
+  const yieldScore = channels / Math.max(runs, 1);
+  const sourceBonus: Record<string, number> = {
+    pattern_probe: 26,
+    ai_slot: 24,
+    ai_vertical: 18,
+    trend: 16,
+    extracted: 12,
+    manual: 10,
+    variation: 8,
+    ai_generated: 8,
+  };
+  const freshnessBonus = row.last_searched_at ? Math.min(30, daysSince(row.last_searched_at) * 3) : 42;
+  const newKeywordBonus = runs === 0 ? 28 : 0;
+  const yieldBonus = Math.min(45, yieldScore * 1.5);
+  const duplicatePenalty =
+    channels > 0 ? Math.min(18, Math.max(0, channels - uniqueChannels) / Math.max(channels, 1) * 30) : 0;
+  const lowYieldPenalty =
+    runs >= 5 && yieldScore < 1 ? 35 : runs >= 3 && yieldScore < 2 ? 18 : 0;
+
+  return Math.round(
+    priority +
+      (sourceBonus[row.source ?? ""] ?? 5) +
+      freshnessBonus +
+      newKeywordBonus +
+      yieldBonus -
+      duplicatePenalty -
+      lowYieldPenalty,
+  );
 }
 
 async function updateKeywordAfterRun(
@@ -157,6 +204,8 @@ export async function runAutoSearch({
         job: "auto_search",
         keyword: keyword.keyword,
         keywordId: keyword.id,
+        keywordSource: keyword.source ?? "unknown",
+        queueScore: smartQueueScore(keyword),
         resultSource: result.source,
       },
       source,
@@ -168,6 +217,8 @@ export async function runAutoSearch({
     perKeyword.push({
       id: keyword.id,
       keyword: keyword.keyword,
+      keywordSource: keyword.source ?? "unknown",
+      queueScore: smartQueueScore(keyword),
       channelsDiscovered: channelCount,
       unitsUsed: keywordUnits,
       source: result.source,

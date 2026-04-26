@@ -21,7 +21,21 @@ export interface KeywordRow {
 interface KeywordListResponse {
   keywords?: KeywordRow[];
   total?: number;
+  summary?: KeywordSummary;
   error?: string;
+}
+
+interface KeywordSummary {
+  total: number;
+  enabled: number;
+  disabled: number;
+  untested: number;
+  averageYield: number;
+  sourceCounts: Record<string, number>;
+  bestSource: {
+    source: string;
+    yield: number;
+  } | null;
 }
 
 interface MutationResponse {
@@ -99,6 +113,7 @@ const sourceClass = (source: string): string => {
   if (source === "ai_generated") return "border-fuchsia-900 bg-fuchsia-950/60 text-fuchsia-100";
   if (source === "ai_vertical") return "border-fuchsia-900 bg-fuchsia-950/60 text-fuchsia-100";
   if (source === "ai_slot") return "border-violet-900 bg-violet-950/60 text-violet-100";
+  if (source === "pattern_probe") return "border-cyan-900 bg-cyan-950/60 text-cyan-100";
   if (source === "variation") return "border-emerald-900 bg-emerald-950/60 text-emerald-100";
   return "border-neutral-700 bg-neutral-900 text-neutral-200";
 };
@@ -112,6 +127,7 @@ export default function KeywordRunner({
 }) {
   const [keywords, setKeywords] = useState(initialKeywords);
   const [total, setTotal] = useState(initialTotal);
+  const [summary, setSummary] = useState<KeywordSummary | null>(null);
   const [keyword, setKeyword] = useState("");
   const [category, setCategory] = useState("");
   const [priority, setPriority] = useState(50);
@@ -142,6 +158,7 @@ export default function KeywordRunner({
       if (!response.ok) throw new Error(data.error ?? "Unable to load keywords");
       setKeywords(data.keywords ?? []);
       setTotal(data.total ?? 0);
+      setSummary(data.summary ?? null);
     },
     [enabled, source],
   );
@@ -180,6 +197,31 @@ export default function KeywordRunner({
       cancelled = true;
     };
   }, [fetchGrowthStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams({ pageSize: "100" });
+
+    fetch(`/api/admin/keywords?${params}`)
+      .then(async (response) => {
+        const data = (await response.json()) as KeywordListResponse;
+        if (!response.ok) throw new Error(data.error ?? "Unable to load keywords");
+        return data;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setKeywords(data.keywords ?? []);
+        setTotal(data.total ?? 0);
+        setSummary(data.summary ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSummary(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const runJob = async (
     label: string,
@@ -402,6 +444,35 @@ export default function KeywordRunner({
         </div>
       )}
 
+      {summary && (
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+            <div className="text-xs uppercase tracking-wider text-neutral-500">Enabled</div>
+            <div className="mt-1 font-mono text-lg text-neutral-100">
+              {summary.enabled}/{summary.total}
+            </div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+            <div className="text-xs uppercase tracking-wider text-neutral-500">Untested</div>
+            <div className="mt-1 font-mono text-lg text-neutral-100">{summary.untested}</div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+            <div className="text-xs uppercase tracking-wider text-neutral-500">Avg yield</div>
+            <div className="mt-1 font-mono text-lg text-neutral-100">
+              {summary.averageYield.toFixed(1)}
+            </div>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+            <div className="text-xs uppercase tracking-wider text-neutral-500">Best source</div>
+            <div className="mt-1 truncate text-sm text-neutral-100">
+              {summary.bestSource
+                ? `${summary.bestSource.source} (${summary.bestSource.yield.toFixed(1)})`
+                : "-"}
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm text-neutral-400">{total} keywords</div>
         <div className="flex flex-wrap gap-2">
@@ -422,6 +493,7 @@ export default function KeywordRunner({
             <option value="ai_generated">AI generated</option>
             <option value="ai_vertical">AI vertical</option>
             <option value="ai_slot">AI slot</option>
+            <option value="pattern_probe">Pattern probe</option>
           </select>
           <select
             value={enabled}

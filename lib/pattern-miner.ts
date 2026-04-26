@@ -55,6 +55,42 @@ const TITLE_REGEXES: Array<{ pattern: string; regex: RegExp }> = [
     pattern: "what if you were {topic}",
     regex: /^what if you were (?:an? |the )?(.{3,80})$/i,
   },
+  {
+    pattern: "why it was horrible to be {topic}",
+    regex: /^why it was (?:horrible|terrible|awful|dangerous) to be (?:an? |the )?(.{3,80})$/i,
+  },
+  {
+    pattern: "you would not survive as {topic}",
+    regex: /^you (?:would not|wouldn't|won't) survive as (?:an? |the )?(.{3,80})$/i,
+  },
+  {
+    pattern: "you would not survive in {topic}",
+    regex: /^you (?:would not|wouldn't|won't) survive in (?:an? |the )?(.{3,80})$/i,
+  },
+  {
+    pattern: "the dark truth about {topic}",
+    regex: /^the dark truth about (?:an? |the )?(.{3,80})$/i,
+  },
+  {
+    pattern: "what happened to {topic}",
+    regex: /^what happened to (?:an? |the )?(.{3,80})$/i,
+  },
+  {
+    pattern: "inside the life of {topic}",
+    regex: /^inside the life of (?:an? |the )?(.{3,80})$/i,
+  },
+  {
+    pattern: "how {topic} actually works",
+    regex: /^how (.{3,80}) actually works$/i,
+  },
+  {
+    pattern: "why {topic} disappeared",
+    regex: /^why (.{3,80}) (?:disappeared|vanished|went extinct)$/i,
+  },
+  {
+    pattern: "why {topic} is so dangerous",
+    regex: /^why (.{3,80}) is so (?:dangerous|deadly|scary|expensive)$/i,
+  },
 ];
 
 function normalizeTitle(title: string): string {
@@ -70,6 +106,52 @@ function viewsPerHour(row: VideoPatternRow): number {
   const publishedAt = row.published_at ? new Date(row.published_at).getTime() : Date.now();
   const ageHours = Math.max(1, (Date.now() - publishedAt) / 3_600_000);
   return Number(row.views ?? 0) / ageHours;
+}
+
+function addExample(
+  candidates: Map<string, PatternCandidate>,
+  pattern: string,
+  patternType: string,
+  row: VideoPatternRow,
+  slotValue: string | null,
+): void {
+  const current = candidates.get(pattern) ?? {
+    pattern,
+    patternType,
+    examples: [],
+  };
+  current.examples.push({
+    videoId: row.youtube_id,
+    channelId: row.channel_id,
+    title: row.title,
+    slotValue: slotValue?.trim().slice(0, 80) ?? null,
+    views: Number(row.views ?? 0),
+    outlierScore: Number(row.outlier_score ?? 0),
+    viewsPerHour: viewsPerHour(row),
+    publishedAt: row.published_at,
+  });
+  candidates.set(pattern, current);
+}
+
+function extractDynamicPattern(title: string): { pattern: string; slot: string } | null {
+  const tokens = title.split(" ").filter(Boolean);
+  if (tokens.length < 6 || tokens.length > 16) return null;
+
+  const prefix = tokens.slice(0, 4).join(" ");
+  const suffix = tokens.slice(-2).join(" ");
+  const slot = tokens.slice(4, -2).join(" ");
+  if (slot.length < 3 || slot.length > 80) return null;
+
+  if (
+    prefix.startsWith("why ") ||
+    prefix.startsWith("how ") ||
+    prefix.startsWith("what ") ||
+    prefix.startsWith("inside ")
+  ) {
+    return { pattern: `${prefix} {topic} ${suffix}`, slot };
+  }
+
+  return null;
 }
 
 async function logDiscovery(
@@ -196,22 +278,18 @@ export async function runPatternMiner(): Promise<KeywordDiscoveryResult> {
     for (const matcher of TITLE_REGEXES) {
       const match = normalized.match(matcher.regex);
       if (!match?.[1]) continue;
-      const current = candidates.get(matcher.pattern) ?? {
-        pattern: matcher.pattern,
-        patternType: "regex",
-        examples: [],
-      };
-      current.examples.push({
-        videoId: row.youtube_id,
-        channelId: row.channel_id,
-        title: row.title,
-        slotValue: match[1].trim().slice(0, 80),
-        views: Number(row.views ?? 0),
-        outlierScore: Number(row.outlier_score ?? 0),
-        viewsPerHour: viewsPerHour(row),
-        publishedAt: row.published_at,
-      });
-      candidates.set(matcher.pattern, current);
+      addExample(candidates, matcher.pattern, "regex", row, match[1]);
+    }
+
+    const dynamicPattern = extractDynamicPattern(normalized);
+    if (dynamicPattern) {
+      addExample(
+        candidates,
+        dynamicPattern.pattern,
+        "dynamic_ngram",
+        row,
+        dynamicPattern.slot,
+      );
     }
   }
 

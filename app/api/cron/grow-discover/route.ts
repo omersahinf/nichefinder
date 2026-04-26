@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runAiPatternSlotFiller } from "@/lib/ai-pattern-slot-filler";
 import { runAiVerticalStrategist } from "@/lib/ai-vertical-strategist";
+import { runChannelQualityScoring } from "@/lib/channel-quality";
 import { runGraphCrawler } from "@/lib/graph-crawler";
 import { runKeywordExtraction } from "@/lib/keyword-extraction";
 import { runKeywordTrends } from "@/lib/keyword-trends";
 import { runKeywordVariation } from "@/lib/keyword-variation";
 import { runPatternMiner } from "@/lib/pattern-miner";
+import { runUploadsDeepScan } from "@/lib/uploads-deep-scan";
 import { runVelocityTracker } from "@/lib/velocity-tracker";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +56,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     safeJob("keyword-variation", runKeywordVariation),
     safeJob("keyword-trends", runKeywordTrends),
     safeJob("graph-crawler", runGraphCrawler),
+    safeJob("channel-quality", runChannelQualityScoring),
+    safeJob("uploads-deep-scan", runUploadsDeepScan),
     safeJob("ai:vertical-strategist", runAiVerticalStrategist),
     safeJob("ai:pattern-slot-filler", runAiPatternSlotFiller),
   ]);

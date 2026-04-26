@@ -3,6 +3,7 @@ import { requireAdminApi } from "@/lib/admin-guard";
 import { runAiPatternSlotFiller } from "@/lib/ai-pattern-slot-filler";
 import { runAiVerticalStrategist } from "@/lib/ai-vertical-strategist";
 import { getTodayAiCostUsd, getTodayShadowCostUsd } from "@/lib/budget-cap";
+import { runChannelQualityScoring } from "@/lib/channel-quality";
 import { runGraphCrawler } from "@/lib/graph-crawler";
 import { runKeywordExtraction } from "@/lib/keyword-extraction";
 import { runKeywordTrends } from "@/lib/keyword-trends";
@@ -10,6 +11,7 @@ import { runKeywordTuning } from "@/lib/keyword-tuning";
 import { runKeywordVariation } from "@/lib/keyword-variation";
 import { runPatternMiner } from "@/lib/pattern-miner";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { runUploadsDeepScan } from "@/lib/uploads-deep-scan";
 import { runVelocityTracker } from "@/lib/velocity-tracker";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +24,8 @@ type GrowthJob =
   | "vary"
   | "trend"
   | "graph"
+  | "quality"
+  | "deep_scan"
   | "ai_vertical"
   | "ai_slot"
   | "tune";
@@ -41,6 +45,8 @@ const DEFAULT_DISCOVER_JOBS: GrowthJob[] = [
   "vary",
   "trend",
   "graph",
+  "quality",
+  "deep_scan",
   "ai_vertical",
   "ai_slot",
 ];
@@ -77,6 +83,8 @@ function runnerFor(job: GrowthJob): [string, () => Promise<Omit<GrowthJobResult,
   if (job === "vary") return ["keyword-variation", runKeywordVariation];
   if (job === "trend") return ["keyword-trends", runKeywordTrends];
   if (job === "graph") return ["graph-crawler", runGraphCrawler];
+  if (job === "quality") return ["channel-quality", runChannelQualityScoring];
+  if (job === "deep_scan") return ["uploads-deep-scan", runUploadsDeepScan];
   if (job === "ai_vertical") return ["ai:vertical-strategist", runAiVerticalStrategist];
   if (job === "ai_slot") return ["ai:pattern-slot-filler", runAiPatternSlotFiller];
   return ["keyword-tuning", runKeywordTuning];

@@ -7,10 +7,69 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE_DEFAULT = 100;
 const PAGE_SIZE_MAX = 250;
 
+interface KeywordSummaryRow {
+  source: string | null;
+  enabled: boolean | null;
+  total_runs: number | string | null;
+  total_channels_added: number | string | null;
+}
+
 function clampPriority(value: unknown, fallback = 50): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+async function loadKeywordSummary(client: NonNullable<ReturnType<typeof getSupabaseAdmin>>) {
+  const { data, error } = await client
+    .from("seed_keywords")
+    .select("source,enabled,total_runs,total_channels_added")
+    .limit(10_000);
+  if (error) throw error;
+
+  const rows = (data ?? []) as KeywordSummaryRow[];
+  const sourceCounts: Record<string, number> = {};
+  const sourceYield: Record<string, { runs: number; channels: number }> = {};
+  let enabled = 0;
+  let disabled = 0;
+  let untested = 0;
+  let runs = 0;
+  let channels = 0;
+
+  for (const row of rows) {
+    const source = row.source ?? "unknown";
+    const rowRuns = Number(row.total_runs ?? 0);
+    const rowChannels = Number(row.total_channels_added ?? 0);
+    sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
+    const current = sourceYield[source] ?? { runs: 0, channels: 0 };
+    current.runs += rowRuns;
+    current.channels += rowChannels;
+    sourceYield[source] = current;
+    if (row.enabled) enabled += 1;
+    else disabled += 1;
+    if (rowRuns === 0) untested += 1;
+    runs += rowRuns;
+    channels += rowChannels;
+  }
+
+  const bestSource =
+    Object.entries(sourceYield)
+      .filter(([, value]) => value.runs > 0)
+      .map(([source, value]) => ({
+        source,
+        yield: value.channels / Math.max(value.runs, 1),
+      }))
+      .sort((a, b) => b.yield - a.yield)[0] ?? null;
+
+  return {
+    total: rows.length,
+    enabled,
+    disabled,
+    untested,
+    averageYield: channels / Math.max(runs, 1),
+    sourceCounts,
+    bestSource,
+  };
 }
 
 function parseBoolean(value: string | null): boolean | null {
@@ -57,14 +116,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (category) query = query.eq("category", category);
     if (enabled !== null) query = query.eq("enabled", enabled);
 
-    const { data, error, count } = await query
+    const [{ data, error, count }, summary] = await Promise.all([
+      query
       .order("enabled", { ascending: false })
       .order("priority", { ascending: false })
       .order("last_searched_at", { ascending: true, nullsFirst: true })
-      .range(from, to);
+        .range(from, to),
+      loadKeywordSummary(client),
+    ]);
 
     if (error) throw error;
-    return NextResponse.json({ keywords: data ?? [], total: count ?? 0, page, pageSize });
+    return NextResponse.json({ keywords: data ?? [], total: count ?? 0, page, pageSize, summary });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to list keywords";
     return NextResponse.json({ error: message }, { status: 500 });
