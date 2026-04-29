@@ -8,14 +8,9 @@ import {
 } from "@/lib/cache";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { getChannelStats } from "@/lib/youtube";
+import { requireAdminApi } from "@/lib/admin-guard";
 
 export const dynamic = "force-dynamic";
-
-const adminEnabled = (): boolean => process.env.ADMIN_UI_ENABLED === "true";
-
-function unauthorized(): NextResponse {
-  return NextResponse.json({ error: "Admin UI disabled" }, { status: 404 });
-}
 
 function extractChannelId(input: unknown): string {
   const raw = typeof input === "string" ? input.trim() : "";
@@ -63,7 +58,8 @@ async function ensureChannelRow(channelId: string): Promise<void> {
 }
 
 export async function GET(): Promise<NextResponse> {
-  if (!adminEnabled()) return unauthorized();
+  const guard = await requireAdminApi();
+  if (guard) return guard;
 
   try {
     const seeds = await listSeedChannels(200);
@@ -75,7 +71,8 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (!adminEnabled()) return unauthorized();
+  const guard = await requireAdminApi();
+  if (guard) return guard;
 
   try {
     const body = (await req.json()) as {

@@ -30,6 +30,7 @@ export interface EnrichedVideo {
   rpmUsd?: number;
   estimatedRevenueUsd?: number;
   isMonetized?: boolean;
+  isShort?: boolean;
 }
 
 export interface SearchAndEnrichResult {

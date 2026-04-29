@@ -22,6 +22,7 @@ import type { EnrichedVideo, SearchAndEnrichResult } from "./search-types";
 import { classifyVideoCategory, estimateRevenue, type VideoCategory } from "./rpm";
 import { estimateMonetized } from "./monetization";
 import { parseIsoDurationToSeconds } from "./duration";
+import { hasShortsSignal } from "./video-format";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -442,6 +443,11 @@ export async function searchAndEnrich(
           rpmUsd: revenue.rpmUsd,
           estimatedRevenueUsd: revenue.estimatedRevenueUsd,
           isMonetized,
+          isShort: hasShortsSignal({
+            title: video.title,
+            description: video.description,
+            tags: stat.tags?.length ? stat.tags : video.tags,
+          }),
         };
 
         return {

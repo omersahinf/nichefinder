@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { SeedChannel } from "@/lib/cache";
+import { parseChannelIdFromUrl } from "@/lib/youtube-url";
 
 const fmt = (n: number): string => {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -25,14 +27,19 @@ type ApiSeedsResponse = {
 };
 
 export default function SeedAdminClient() {
+  const searchParams = useSearchParams();
+  const channelUrlParam = searchParams.get("channelUrl");
+
+  const initialChannelId = channelUrlParam ? parseChannelIdFromUrl(channelUrlParam) ?? "" : "";
+
   const [seeds, setSeeds] = useState<SeedChannel[]>([]);
-  const [channelId, setChannelId] = useState("");
+  const [channelId, setChannelId] = useState(initialChannelId);
   const [priority, setPriority] = useState(50);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [crawling, setCrawling] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(channelUrlParam ? `Pre-filled from URL: ${channelUrlParam}` : null);
+  const [error, setError] = useState<string | null>(channelUrlParam && !parseChannelIdFromUrl(channelUrlParam) ? `Could not parse channel ID from: ${channelUrlParam}` : null);
 
   const stats = useMemo(() => {
     const uncrawled = seeds.filter((seed) => !seed.lastCrawledAt).length;
@@ -50,7 +57,7 @@ export default function SeedAdminClient() {
   const refresh = useCallback(async (): Promise<void> => {
     setError(null);
     setSeeds(await fetchSeeds());
-  }, [fetchSeeds]);
+  }, [fetchSeeds, setError, setSeeds]);
 
   useEffect(() => {
     let cancelled = false;

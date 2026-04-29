@@ -6,6 +6,7 @@ import { parseIsoDurationToSeconds } from "./duration";
 import type { EnrichedVideo, QuotaUsage, SearchSource } from "./search-types";
 import type { ChannelTrend, VideoSample } from "./trend";
 import { estimateRevenue, type VideoCategory } from "./rpm";
+import { hasShortsSignal, matchesVideoFormat, type VideoFormatFilter } from "./video-format";
 
 const CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
 const VIDEO_TTL_MS = 12 * 60 * 60 * 1000;
@@ -105,6 +106,7 @@ export interface BrowseFilters {
   publishedBefore?: string;
   minDurationSeconds?: number;
   maxDurationSeconds?: number;
+  format?: VideoFormatFilter;
   sort?: "outlier" | "views" | "date" | "subs";
   limit?: number;
 }
@@ -674,6 +676,11 @@ function hydrateVideoRow(row: VideoRow, channel: ChannelRow): EnrichedVideo {
     channelThumbnail: channel.thumbnail_url ?? undefined,
     outlierScore,
     isMonetized: channel.is_monetized ?? undefined,
+    isShort: hasShortsSignal({
+      title: row.title,
+      description: row.description ?? "",
+      tags: row.tags ?? [],
+    }),
   };
 
   const category = channel.category as VideoCategory | null;
@@ -824,6 +831,7 @@ export async function browseCachedVideos(
       ) {
         return false;
       }
+      if (!matchesVideoFormat(video, filters.format)) return false;
       return true;
     })
     .sort((a, b) => {
@@ -925,6 +933,7 @@ export async function logSearch(
   filters: Record<string, unknown>,
   count: number,
   meta: {
+    userId?: string;
     source: SearchSource;
     fallbackReason?: string;
     quotaUnits?: number;
@@ -937,6 +946,7 @@ export async function logSearch(
     const { error } = await client.from("searches").insert({
       keyword,
       normalized_keyword: normalizeKeyword(keyword),
+      user_id: meta.userId ?? null,
       filters_json: filters,
       results_count: count,
       source: meta.source,

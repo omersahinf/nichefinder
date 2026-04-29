@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Chrome extension files (plain JS, separate linting)
+    "nichefinder-extension/**",
   ]),
 ]);
 

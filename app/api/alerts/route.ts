@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAlert, deleteAlert, listAlerts } from "@/lib/alerts";
+import { requireAdminApi } from "@/lib/admin-guard";
 
 export const dynamic = "force-dynamic";
 
-const adminEnabled = (): boolean => process.env.ADMIN_UI_ENABLED === "true";
-
-function unauthorized(): NextResponse {
-  return NextResponse.json({ error: "Admin UI disabled" }, { status: 404 });
-}
-
 export async function GET(): Promise<NextResponse> {
-  if (!adminEnabled()) return unauthorized();
+  const guard = await requireAdminApi();
+  if (guard) return guard;
 
   try {
     const alerts = await listAlerts();
@@ -22,7 +18,8 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (!adminEnabled()) return unauthorized();
+  const guard = await requireAdminApi();
+  if (guard) return guard;
 
   try {
     const body = (await req.json()) as {
@@ -47,7 +44,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function DELETE(req: NextRequest): Promise<NextResponse> {
-  if (!adminEnabled()) return unauthorized();
+  const guard = await requireAdminApi();
+  if (guard) return guard;
 
   try {
     const id = req.nextUrl.searchParams.get("id") ?? "";

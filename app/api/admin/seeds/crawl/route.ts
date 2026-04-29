@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { refreshSeedChannels } from "@/lib/refresh-seeds";
+import { requireAdminApi } from "@/lib/admin-guard";
 
 export const dynamic = "force-dynamic";
-
-const adminEnabled = (): boolean => process.env.ADMIN_UI_ENABLED === "true";
-
-function unauthorized(): NextResponse {
-  return NextResponse.json({ error: "Admin UI disabled" }, { status: 404 });
-}
 
 function cleanChannelIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -20,7 +15,8 @@ function cleanChannelIds(value: unknown): string[] {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (!adminEnabled()) return unauthorized();
+  const guard = await requireAdminApi();
+  if (guard) return guard;
 
   try {
     if (!process.env.YOUTUBE_API_KEY) {

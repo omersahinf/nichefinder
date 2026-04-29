@@ -34,6 +34,8 @@ Required values:
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `CRON_SECRET`
 - `RESEND_API_KEY` and `RESEND_FROM` for email alerts
+- `STRIPE_SECRET_KEY`, `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY`, `STRIPE_WEBHOOK_SECRET`
+- `ANTHROPIC_API_KEY` for AI niche analysis
 
 3. Apply Supabase migrations from `supabase/migrations` in order.
 
@@ -64,3 +66,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" \
 - Cached searches use Supabase and can be bypassed with `force=1`.
 - Seed refresh uses RSS for discovery and batched YouTube API calls for stats.
 - Similar-channel and alert features require migrations `005_channel_tags.sql` and `006_alerts.sql` to be applied to the active Supabase project.
+- Public API keys require migrations `010_subscriptions.sql` and `011_api_keys.sql`.
+- AI niche insights require migration `012_ai_niche_insights.sql`.
+- AI title generator requires migration `013_ai_title_generations.sql`.
+- AI idea finder requires migration `014_ai_idea_generations.sql`.
