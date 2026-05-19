@@ -1,12 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runChannelQualityScoring } from "@/lib/channel-quality";
-import { runGraphCrawler } from "@/lib/graph-crawler";
-import { runKeywordExtraction } from "@/lib/keyword-extraction";
-import { runKeywordTrends } from "@/lib/keyword-trends";
-import { runKeywordVariation } from "@/lib/keyword-variation";
-import { runPatternMiner } from "@/lib/pattern-miner";
-import { runUploadsDeepScan } from "@/lib/uploads-deep-scan";
-import { runVelocityTracker } from "@/lib/velocity-tracker";
+import { runAiPatternSlotFiller } from "@/lib/ai-pattern-slot-filler";
+import { runAiVerticalStrategist } from "@/lib/ai-vertical-strategist";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -48,18 +42,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const startedAt = Date.now();
   const results = await Promise.all([
-    safeJob("pattern-miner", runPatternMiner),
-    safeJob("velocity-tracker", runVelocityTracker),
-    safeJob("keyword-extraction", runKeywordExtraction),
-    safeJob("keyword-variation", runKeywordVariation),
-    safeJob("keyword-trends", runKeywordTrends),
-    safeJob("graph-crawler", runGraphCrawler),
-    safeJob("channel-quality", runChannelQualityScoring),
-    safeJob("uploads-deep-scan", runUploadsDeepScan),
+    safeJob("ai:vertical-strategist", runAiVerticalStrategist),
+    safeJob("ai:pattern-slot-filler", runAiPatternSlotFiller),
   ]);
 
   return NextResponse.json({
-    mode: "discover",
+    mode: "discover-ai",
     durationMs: Date.now() - startedAt,
     results: Object.fromEntries(results.map((result) => [result.job, result])),
   });

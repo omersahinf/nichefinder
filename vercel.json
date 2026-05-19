@@ -21,6 +21,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/grow-discover-ai",
+      "schedule": "30 4 * * *"
+    },
+    {
       "path": "/api/cron/grow-tune",
       "schedule": "0 6 * * *"
     }
