@@ -36,16 +36,29 @@ interface OpenAiCompatibleResponse {
   };
 }
 
-export function aiConfig(): { provider: string; apiKey?: string; baseUrl: string; model: string } {
+export function aiConfig(): {
+  provider: string;
+  apiKey?: string;
+  baseUrl: string;
+  model: string;
+  fallbackModel?: string;
+} {
+  const provider = process.env.AI_PROVIDER?.trim() || "openai_compatible";
+  const apiKey =
+    provider === "openrouter"
+      ? process.env.OPENROUTER_API_KEY?.trim()
+      : process.env.AI_API_KEY?.trim() ||
+        process.env.OPENROUTER_API_KEY?.trim() ||
+        process.env.DASHSCOPE_API_KEY?.trim() ||
+        process.env.GEMINI_API_KEY?.trim();
+
   return {
-    provider: process.env.AI_PROVIDER?.trim() || "openai_compatible",
-    apiKey:
-      process.env.AI_API_KEY?.trim() ||
-      process.env.DASHSCOPE_API_KEY?.trim() ||
-      process.env.GEMINI_API_KEY?.trim(),
+    provider,
+    apiKey,
     baseUrl:
       process.env.AI_BASE_URL?.trim() || "https://coding-intl.dashscope.aliyuncs.com/v1",
-    model: process.env.AI_MODEL?.trim() || "qwen3-max-2026-01-23",
+    model: process.env.AI_MODEL?.trim() || "qwen3.6-plus",
+    fallbackModel: process.env.AI_FALLBACK_MODEL?.trim() || undefined,
   };
 }
 
@@ -141,56 +154,98 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 export async function generateAiJson<T>(options: AiJsonOptions): Promise<AiJsonResult<T>> {
   const config = aiConfig();
-  if (!config.apiKey) throw new Error("AI_API_KEY, DASHSCOPE_API_KEY, or GEMINI_API_KEY missing");
+  if (!config.apiKey) {
+    throw new Error("AI_API_KEY, OPENROUTER_API_KEY, DASHSCOPE_API_KEY, or GEMINI_API_KEY missing");
+  }
 
   const budget = await checkAiBudget(options.estimatedUsd ?? 0.01);
   if (!budget.allowed) {
     throw new Error(budget.reason ?? "AI budget cap reached");
   }
 
-  const body = {
-    model: config.model,
-    messages: [
-      { role: "system", content: options.system },
-      { role: "user", content: options.user },
-    ],
-    temperature: options.temperature ?? 0.7,
-    max_tokens: options.maxTokens ?? 4096,
-    response_format: { type: "json_object" },
-    ...options.extraBody,
+  const requestModel = async (
+    model: string,
+  ): Promise<{ model: string; result: OpenAiCompatibleResponse; text: string }> => {
+    const body = {
+      model,
+      messages: [
+        { role: "system", content: options.system },
+        { role: "user", content: options.user },
+      ],
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens ?? 4096,
+      response_format: { type: "json_object" },
+      ...options.extraBody,
+    };
+
+    const response = await fetch(`${normalizeBaseUrl(config.baseUrl)}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const result = (await response.json()) as OpenAiCompatibleResponse;
+    if (!response.ok) {
+      const detail = result.error?.message ? ` - ${result.error.message}` : "";
+      throw new Error(`AI request failed for ${model}: ${response.status}${detail}`);
+    }
+
+    return {
+      model,
+      result,
+      text: result.choices?.[0]?.message?.content ?? "",
+    };
   };
 
-  const response = await fetch(`${normalizeBaseUrl(config.baseUrl)}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  const fallbackModel =
+    config.fallbackModel && config.fallbackModel !== config.model ? config.fallbackModel : undefined;
 
-  const result = (await response.json()) as OpenAiCompatibleResponse;
-  if (!response.ok) {
-    const detail = result.error?.message ? ` - ${result.error.message}` : "";
-    throw new Error(`AI request failed: ${response.status}${detail}`);
+  let completion: { model: string; result: OpenAiCompatibleResponse; text: string };
+  try {
+    completion = await requestModel(config.model);
+  } catch (error) {
+    if (!fallbackModel) throw error;
+    console.warn("[ai] primary model failed, retrying fallback", {
+      primaryModel: config.model,
+      fallbackModel,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    completion = await requestModel(fallbackModel);
   }
 
-  const text = result.choices?.[0]?.message?.content ?? "";
-  const inputTokens = result.usage?.prompt_tokens ?? result.usage?.input_tokens ?? 0;
-  const outputTokens = result.usage?.completion_tokens ?? result.usage?.output_tokens ?? 0;
+  let data: T;
+  try {
+    data = extractJson(completion.text) as T;
+  } catch (error) {
+    if (!fallbackModel || completion.model === fallbackModel) throw error;
+    console.warn("[ai] primary model returned invalid JSON, retrying fallback", {
+      primaryModel: completion.model,
+      fallbackModel,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    completion = await requestModel(fallbackModel);
+    data = extractJson(completion.text) as T;
+  }
+
+  const inputTokens = completion.result.usage?.prompt_tokens ?? completion.result.usage?.input_tokens ?? 0;
+  const outputTokens =
+    completion.result.usage?.completion_tokens ?? completion.result.usage?.output_tokens ?? 0;
   const costUsd = await recordAiUsage({
     provider: config.provider,
-    model: config.model,
+    model: completion.model,
     job: options.job,
     inputTokens,
     outputTokens,
-    metadata: { baseUrl: config.baseUrl },
+    metadata: { baseUrl: config.baseUrl, primaryModel: config.model, fallbackModel },
   });
 
   return {
-    data: extractJson(text) as T,
+    data,
     provider: config.provider,
-    model: config.model,
+    model: completion.model,
     inputTokens,
     outputTokens,
     costUsd,

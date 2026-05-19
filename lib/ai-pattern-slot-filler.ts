@@ -86,6 +86,7 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
 
   const apiKey =
     process.env.AI_API_KEY?.trim() ||
+    process.env.OPENROUTER_API_KEY?.trim() ||
     process.env.DASHSCOPE_API_KEY?.trim() ||
     process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
