@@ -270,7 +270,7 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
 
   const ai = await generateAiJson<AiVerticalResponse>({
     job: "ai:vertical-strategist",
-    maxTokens: 8192,
+    maxTokens: 2048,
     temperature: 0.85,
     estimatedUsd: 0.02,
     extraBody: {

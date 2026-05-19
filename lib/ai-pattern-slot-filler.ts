@@ -133,7 +133,7 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
 
   const ai = await generateAiJson<AiSlotResponse>({
     job: "ai:pattern-slot-filler",
-    maxTokens: 8192,
+    maxTokens: 2048,
     temperature: 0.8,
     estimatedUsd: 0.02,
     extraBody: {
