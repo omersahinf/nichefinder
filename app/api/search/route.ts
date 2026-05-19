@@ -2,38 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchAndEnrich } from "@/lib/youtube";
 import { computeSaturation } from "@/lib/saturation";
 import {
-  browseCachedVideos,
   getTodayQuotaUsage,
   isQuotaGuardActive,
   logSearch,
+  queueLowResultKeywordCandidate,
   recordApiUsage,
+  searchCachedVideos,
 } from "@/lib/cache";
 import { getCurrentAuthIdentity } from "@/lib/auth";
 import { enforceQuota } from "@/lib/billing";
-import { applySearchFilters, parseSearchRequest } from "@/lib/search-api";
+import { parseSearchRequest } from "@/lib/search-api";
+import type { SearchSource } from "@/lib/search-types";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const { q, maxResults, days, forceRefresh, filterParams } = parseSearchRequest(
-    req.nextUrl.searchParams,
-  );
+  const { q, days, forceRefresh, page, pageSize, apiFetchSize, filterParams } =
+    parseSearchRequest(req.nextUrl.searchParams);
 
   try {
     const identity = await getCurrentAuthIdentity();
-
-    if (!q) {
-      const results = await browseCachedVideos({ ...filterParams, limit: 100 });
-      const saturation = computeSaturation(results);
-
-      return NextResponse.json({
-        query: "",
-        count: results.length,
-        source: "cache",
-        browseMode: true,
-        results,
-        saturation,
-        quota: await getTodayQuotaUsage(),
-      });
-    }
 
     const quotaCheck = await enforceQuota(identity?.id, "search");
     if (!quotaCheck.allowed) {
@@ -43,52 +31,88 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const quotaBefore = await getTodayQuotaUsage();
-    const { results: rawResults, source, fallbackReason, cacheHit, quotaUnits = 0, fetchedAt } =
-      await searchAndEnrich(q, maxResults, {
+    let source: SearchSource = "database";
+    let fallbackReason: string | undefined;
+    let refreshReason: string | undefined;
+    let fetchedAt: string | undefined;
+    let quotaUnits = 0;
+
+    if (forceRefresh && q) {
+      const quotaBefore = await getTodayQuotaUsage();
+      const refreshResult = await searchAndEnrich(q, apiFetchSize, {
         publishedAfter: filterParams.publishedAfter,
         publishedBefore: filterParams.publishedBefore,
         days,
         filterLog: filterParams,
         forceMock: isQuotaGuardActive(quotaBefore),
-        forceRefresh,
+        forceRefresh: true,
       });
-    const results = applySearchFilters(rawResults, filterParams);
 
-    await recordApiUsage(quotaUnits, {
-      query: q,
-      maxResults,
-      days,
-      source,
-      ...filterParams,
-    });
-    await logSearch(
+      source =
+        refreshResult.source === "youtube_refresh" ? "database_youtube_refresh" : "database";
+      fallbackReason = refreshResult.fallbackReason;
+      refreshReason = refreshResult.fallbackReason;
+      fetchedAt = refreshResult.fetchedAt;
+      quotaUnits = refreshResult.quotaUnits ?? 0;
+
+      await recordApiUsage(quotaUnits, {
+        query: q,
+        apiFetchSize,
+        days,
+        source: refreshResult.source,
+        ...filterParams,
+      });
+    } else if (forceRefresh && !q) {
+      refreshReason = "Keyword is required for YouTube refresh";
+    }
+
+    const dbPage = await searchCachedVideos({
       q,
+      ...filterParams,
+      page,
+      pageSize,
+    });
+
+    if (q && !forceRefresh) {
+      await queueLowResultKeywordCandidate(q, dbPage.totalCount);
+    }
+
+    await logSearch(
+      q ?? "",
       {
-        maxResults,
+        page,
+        pageSize,
+        apiFetchSize,
         days,
         forceRefresh,
         ...filterParams,
         publishedAfter: filterParams.publishedAfter ?? null,
         publishedBefore: filterParams.publishedBefore ?? null,
       },
-      results.length,
+      dbPage.totalCount,
       { userId: identity?.id, source, fallbackReason, quotaUnits },
     );
 
-    const saturation = computeSaturation(results);
+    const saturation = computeSaturation(dbPage.results);
     const quota = await getTodayQuotaUsage();
 
     return NextResponse.json({
-      query: q,
-      count: results.length,
+      query: q ?? "",
+      count: dbPage.results.length,
+      totalCount: dbPage.totalCount,
+      page: dbPage.page,
+      pageSize: dbPage.pageSize,
+      hasMore: dbPage.hasMore,
       source,
       fallbackReason,
-      cacheHit,
+      refreshReason,
+      dbMatchCount: dbPage.totalCount,
+      cacheHit: true,
+      browseMode: !q,
       quotaUnits,
       quota,
       fetchedAt,
-      results,
+      results: dbPage.results,
       saturation,
     });
   } catch (err) {

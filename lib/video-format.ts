@@ -15,6 +15,10 @@ export function hasShortsSignal(video: Pick<EnrichedVideo, "title" | "descriptio
 export function matchesVideoFormat(video: EnrichedVideo, format: VideoFormatFilter = "all"): boolean {
   if (format === "all") return true;
 
-  const isShort = video.isShort ?? hasShortsSignal(video);
+  const durationShort =
+    typeof video.durationSeconds === "number" && video.durationSeconds > 0
+      ? video.durationSeconds <= 60
+      : false;
+  const isShort = (video.isShort ?? hasShortsSignal(video)) || durationShort;
   return format === "shorts" ? isShort : !isShort;
 }

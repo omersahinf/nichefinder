@@ -8,6 +8,7 @@ export const DURATION_PRESETS: DurationRange[] = [
   { label: "Any", minSeconds: 0, maxSeconds: Number.POSITIVE_INFINITY },
   { label: "Under 1m", minSeconds: 0, maxSeconds: 60 },
   { label: "1-4m", minSeconds: 60, maxSeconds: 240 },
+  { label: "8m+", minSeconds: 480, maxSeconds: Number.POSITIVE_INFINITY },
   { label: "Medium (4-20m)", minSeconds: 240, maxSeconds: 1200 },
   { label: "Long (20m+)", minSeconds: 1200, maxSeconds: Number.POSITIVE_INFINITY },
 ];

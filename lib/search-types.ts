@@ -1,6 +1,12 @@
 import type { ChannelTrend } from "./trend";
 
-export type SearchSource = "youtube" | "mock" | "cache";
+export type SearchSource =
+  | "database"
+  | "database_youtube_refresh"
+  | "youtube_refresh"
+  | "mock";
+
+export type StoredSearchSource = SearchSource | "youtube" | "cache";
 
 export interface EnrichedVideo {
   id: string;

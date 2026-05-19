@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchAndEnrich } from "@/lib/youtube";
 import { computeSaturation } from "@/lib/saturation";
-import { getTodayQuotaUsage, isQuotaGuardActive, logSearch, recordApiUsage } from "@/lib/cache";
+import {
+  getTodayQuotaUsage,
+  isQuotaGuardActive,
+  logSearch,
+  queueLowResultKeywordCandidate,
+  recordApiUsage,
+  searchCachedVideos,
+} from "@/lib/cache";
 import { validateApiKey } from "@/lib/api-keys";
-import { applySearchFilters, parseSearchRequest } from "@/lib/search-api";
+import { parseSearchRequest } from "@/lib/search-api";
 import { enforceQuota } from "@/lib/billing";
+import type { SearchSource } from "@/lib/search-types";
 
 function bearerToken(req: NextRequest): string | null {
   const header = req.headers.get("authorization");
@@ -26,13 +34,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
   }
 
-  const { q, maxResults, days, forceRefresh, filterParams } = parseSearchRequest(
-    req.nextUrl.searchParams,
-  );
-
-  if (!q) {
-    return NextResponse.json({ error: "Query parameter q is required" }, { status: 400 });
-  }
+  const { q, days, forceRefresh, page, pageSize, apiFetchSize, filterParams } =
+    parseSearchRequest(req.nextUrl.searchParams);
 
   const apiAccess = await enforceQuota(key.userId, "api_access");
   if (!apiAccess.allowed) {
@@ -45,30 +48,59 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const quotaBefore = await getTodayQuotaUsage();
-    const { results: rawResults, source, fallbackReason, cacheHit, quotaUnits = 0, fetchedAt } =
-      await searchAndEnrich(q, maxResults, {
+    let source: SearchSource = "database";
+    let fallbackReason: string | undefined;
+    let refreshReason: string | undefined;
+    let fetchedAt: string | undefined;
+    let quotaUnits = 0;
+
+    if (forceRefresh && q) {
+      const quotaBefore = await getTodayQuotaUsage();
+      const refreshResult = await searchAndEnrich(q, apiFetchSize, {
         publishedAfter: filterParams.publishedAfter,
         publishedBefore: filterParams.publishedBefore,
         days,
         filterLog: { ...filterParams, channel: "api" },
         forceMock: isQuotaGuardActive(quotaBefore),
-        forceRefresh,
+        forceRefresh: true,
       });
-    const results = applySearchFilters(rawResults, filterParams);
 
-    await recordApiUsage(quotaUnits, {
-      query: q,
-      maxResults,
-      days,
-      source,
-      via: "api_key",
-      ...filterParams,
-    });
-    await logSearch(
+      source =
+        refreshResult.source === "youtube_refresh" ? "database_youtube_refresh" : "database";
+      fallbackReason = refreshResult.fallbackReason;
+      refreshReason = refreshResult.fallbackReason;
+      fetchedAt = refreshResult.fetchedAt;
+      quotaUnits = refreshResult.quotaUnits ?? 0;
+
+      await recordApiUsage(quotaUnits, {
+        query: q,
+        apiFetchSize,
+        days,
+        source: refreshResult.source,
+        via: "api_key",
+        ...filterParams,
+      });
+    } else if (forceRefresh && !q) {
+      refreshReason = "Keyword is required for YouTube refresh";
+    }
+
+    const dbPage = await searchCachedVideos({
       q,
+      ...filterParams,
+      page,
+      pageSize,
+    });
+
+    if (q && !forceRefresh) {
+      await queueLowResultKeywordCandidate(q, dbPage.totalCount);
+    }
+
+    await logSearch(
+      q ?? "",
       {
-        maxResults,
+        page,
+        pageSize,
+        apiFetchSize,
         days,
         forceRefresh,
         via: "api_key",
@@ -76,20 +108,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         publishedAfter: filterParams.publishedAfter ?? null,
         publishedBefore: filterParams.publishedBefore ?? null,
       },
-      results.length,
+      dbPage.totalCount,
       { userId: key.userId, source, fallbackReason, quotaUnits },
     );
 
     return NextResponse.json({
-      query: q,
-      count: results.length,
+      query: q ?? "",
+      count: dbPage.results.length,
+      totalCount: dbPage.totalCount,
+      page: dbPage.page,
+      pageSize: dbPage.pageSize,
+      hasMore: dbPage.hasMore,
       source,
       fallbackReason,
-      cacheHit,
+      refreshReason,
+      dbMatchCount: dbPage.totalCount,
+      cacheHit: true,
+      browseMode: !q,
       quotaUnits,
       fetchedAt,
-      results,
-      saturation: computeSaturation(results),
+      results: dbPage.results,
+      saturation: computeSaturation(dbPage.results),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Search failed";

@@ -120,6 +120,7 @@ interface ChannelsResponseItem {
 
 interface YoutubeApiResponse<TItem> {
   items?: TItem[];
+  nextPageToken?: string;
   error?: {
     message?: string;
   };
@@ -133,6 +134,11 @@ type SearchOptions = {
   publishedBefore?: string;
   regionCode?: string;
 };
+
+interface SearchVideosResult {
+  videos: VideoSnippet[];
+  pagesFetched: number;
+}
 
 type SearchAndEnrichOptions = {
   publishedAfter?: string;
@@ -161,49 +167,70 @@ async function fetchYoutubeJson<TItem>(
   return data;
 }
 
-export async function searchVideos(opts: SearchOptions): Promise<VideoSnippet[]> {
-  const params = new URLSearchParams({
-    key: apiKey(),
-    part: "snippet",
-    type: "video",
-    q: opts.query,
-    maxResults: String(opts.maxResults ?? 25),
-    order: opts.order ?? "relevance",
-  });
+function searchItemToSnippet(item: SearchResponseItem): VideoSnippet | null {
+  const videoId = item.id?.videoId;
+  const snippet = item.snippet;
 
-  if (opts.publishedAfter) params.set("publishedAfter", opts.publishedAfter);
-  if (opts.publishedBefore) params.set("publishedBefore", opts.publishedBefore);
-  if (opts.regionCode) params.set("regionCode", opts.regionCode);
+  if (
+    !videoId ||
+    !snippet?.channelId ||
+    !snippet.channelTitle ||
+    !snippet.title ||
+    !snippet.publishedAt
+  ) {
+    return null;
+  }
 
-  const data = await fetchYoutubeJson<SearchResponseItem>("search", params, 300);
+  return {
+    id: videoId,
+    channelId: snippet.channelId,
+    channelTitle: snippet.channelTitle,
+    title: snippet.title,
+    description: snippet.description ?? "",
+    publishedAt: snippet.publishedAt,
+    thumbnail: snippet.thumbnails?.medium?.url ?? "",
+    tags: [],
+  };
+}
 
-  return (data.items ?? []).flatMap((item) => {
-    const videoId = item.id?.videoId;
-    const snippet = item.snippet;
+export async function searchVideos(opts: SearchOptions): Promise<SearchVideosResult> {
+  const requestedMax = Math.max(1, opts.maxResults ?? 25);
+  const results: VideoSnippet[] = [];
+  const seen = new Set<string>();
+  let pageToken: string | undefined;
+  let pagesFetched = 0;
 
-    if (
-      !videoId ||
-      !snippet?.channelId ||
-      !snippet.channelTitle ||
-      !snippet.title ||
-      !snippet.publishedAt
-    ) {
-      return [];
+  while (results.length < requestedMax) {
+    const params = new URLSearchParams({
+      key: apiKey(),
+      part: "snippet",
+      type: "video",
+      q: opts.query,
+      maxResults: String(Math.min(50, requestedMax - results.length)),
+      order: opts.order ?? "relevance",
+    });
+
+    if (opts.publishedAfter) params.set("publishedAfter", opts.publishedAfter);
+    if (opts.publishedBefore) params.set("publishedBefore", opts.publishedBefore);
+    if (opts.regionCode) params.set("regionCode", opts.regionCode);
+    if (pageToken) params.set("pageToken", pageToken);
+
+    const data = await fetchYoutubeJson<SearchResponseItem>("search", params, 300);
+    pagesFetched += 1;
+
+    for (const item of data.items ?? []) {
+      const snippet = searchItemToSnippet(item);
+      if (!snippet || seen.has(snippet.id)) continue;
+      seen.add(snippet.id);
+      results.push(snippet);
+      if (results.length >= requestedMax) break;
     }
 
-    return [
-      {
-        id: videoId,
-        channelId: snippet.channelId,
-        channelTitle: snippet.channelTitle,
-        title: snippet.title,
-        description: snippet.description ?? "",
-        publishedAt: snippet.publishedAt,
-        thumbnail: snippet.thumbnails?.medium?.url ?? "",
-        tags: [],
-      },
-    ];
-  });
+    if (!data.nextPageToken) break;
+    pageToken = data.nextPageToken;
+  }
+
+  return { videos: results, pagesFetched };
 }
 
 export async function getVideoStats(ids: string[]): Promise<VideoStats[]> {
@@ -323,7 +350,7 @@ export async function searchAndEnrich(
 
     return {
       results: withTrend,
-      source: "cache",
+      source: "database",
       cacheHit: true,
       quotaUnits: 0,
       fetchedAt: cachedSearch.fetchedAt,
@@ -351,17 +378,18 @@ export async function searchAndEnrich(
   }
 
   try {
-    const videos = await searchVideos({
+    const searchResult = await searchVideos({
       query,
       maxResults,
       publishedAfter: options.publishedAfter,
       publishedBefore: options.publishedBefore,
     });
-    let quotaUnits = 100;
+    const videos = searchResult.videos;
+    let quotaUnits = searchResult.pagesFetched * 100;
 
     if (videos.length === 0) {
-      await writeSearchCache(cacheOptions, [], "youtube");
-      return { results: [], source: "youtube", quotaUnits, fetchedAt: new Date().toISOString() };
+      await writeSearchCache(cacheOptions, [], "youtube_refresh");
+      return { results: [], source: "youtube_refresh", quotaUnits, fetchedAt: new Date().toISOString() };
     }
 
     const videoIds = videos.map((video) => video.id);
@@ -524,7 +552,7 @@ export async function searchAndEnrich(
       channelTrend: trendMap.get(video.channelId) ?? null,
     }));
 
-    await writeSearchCache(cacheOptions, resultsWithTrend, "youtube");
+    await writeSearchCache(cacheOptions, resultsWithTrend, "youtube_refresh");
     await promoteToSeed(
       resultsWithTrend.slice(0, 10).map((video) => video.channelId),
       "user_search",
@@ -532,7 +560,7 @@ export async function searchAndEnrich(
 
     return {
       results: resultsWithTrend,
-      source: "youtube",
+      source: "youtube_refresh",
       quotaUnits,
       fetchedAt: new Date().toISOString(),
     };

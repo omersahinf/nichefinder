@@ -1,6 +1,13 @@
 import type { EnrichedVideo } from "./search-types";
 
 export interface SaturationReport {
+  totalVideos: number;
+  uniqueChannels: number;
+  medianChannelSubs: number;
+  rpmMin?: number;
+  rpmMax?: number;
+  opportunityScore?: number;
+  avgOutlierScore?: number;
   totalChannels: number;
   medianSubs: number;
   smallChannelCount: number;
@@ -45,9 +52,15 @@ export function computeSaturation(videos: EnrichedVideo[]): SaturationReport | n
   const smallOutliers = small.filter((c) => c.bestOutlier >= OUTLIER_MIN);
   const avgOutlier =
     videos.reduce((sum, v) => sum + v.outlierScore, 0) / videos.length;
+  const rpms = videos
+    .map((v) => v.rpmUsd)
+    .filter((rpm): rpm is number => typeof rpm === "number" && Number.isFinite(rpm));
 
   const smallRatio = totalChannels > 0 ? small.length / totalChannels : 0;
   const smallOutlierRatio = small.length > 0 ? smallOutliers.length / small.length : 0;
+  const opportunityScore = Math.round(
+    Math.min(100, Math.max(0, smallOutlierRatio * 55 + Math.min(avgOutlier, 10) * 4.5)),
+  );
 
   let level: SaturationReport["level"];
   let label: string;
@@ -68,6 +81,13 @@ export function computeSaturation(videos: EnrichedVideo[]): SaturationReport | n
   }
 
   return {
+    totalVideos: videos.length,
+    uniqueChannels: totalChannels,
+    medianChannelSubs: med,
+    rpmMin: rpms.length > 0 ? Math.min(...rpms) : undefined,
+    rpmMax: rpms.length > 0 ? Math.max(...rpms) : undefined,
+    opportunityScore,
+    avgOutlierScore: avgOutlier,
     totalChannels,
     medianSubs: med,
     smallChannelCount: small.length,

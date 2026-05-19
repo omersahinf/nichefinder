@@ -8,6 +8,9 @@ export interface ParsedSearchRequest {
   maxResults: number;
   days: number;
   forceRefresh: boolean;
+  page: number;
+  pageSize: number;
+  apiFetchSize: number;
   filterParams: {
     minSubs?: number;
     maxSubs?: number;
@@ -26,6 +29,17 @@ const finiteNumber = (value: string | null): number | undefined => {
   if (value === null || value.trim() === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const boundedInteger = (
+  value: string | null,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
 };
 
 const isoStart = (value: string | null): string | undefined => {
@@ -54,13 +68,13 @@ export const formatValue = (value: string | null): VideoFormatFilter => {
 
 export function parseSearchRequest(params: URLSearchParams): ParsedSearchRequest {
   const q = params.get("q")?.trim() || undefined;
-  const requestedMax = Number(params.get("max") ?? 25);
-  const maxResults = Number.isFinite(requestedMax)
-    ? Math.min(Math.max(requestedMax, 5), 50)
-    : 25;
+  const page = boundedInteger(params.get("page"), 1, 1, 10_000);
+  const pageSize = boundedInteger(params.get("pageSize") ?? params.get("max"), 100, 1, 500);
+  const apiFetchSize = boundedInteger(params.get("apiFetchSize") ?? params.get("max"), 50, 1, 200);
+  const maxResults = apiFetchSize;
   const requestedDays = Number(params.get("days") ?? 0);
   const days = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : 0;
-  const forceRefresh = params.get("force") === "1";
+  const forceRefresh = params.get("forceRefresh") === "1" || params.get("force") === "1";
   const minSubs = finiteNumber(params.get("minSubs"));
   const maxSubs = finiteNumber(params.get("maxSubs"));
   const minViews = finiteNumber(params.get("minViews"));
@@ -81,6 +95,9 @@ export function parseSearchRequest(params: URLSearchParams): ParsedSearchRequest
     maxResults,
     days,
     forceRefresh,
+    page,
+    pageSize,
+    apiFetchSize,
     filterParams: {
       minSubs,
       maxSubs,

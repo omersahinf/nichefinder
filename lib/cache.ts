@@ -3,7 +3,7 @@ import type { ChannelStats, VideoStats } from "./youtube";
 import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase";
 import { normalizeKeyword } from "./niche-utils";
 import { parseIsoDurationToSeconds } from "./duration";
-import type { EnrichedVideo, QuotaUsage, SearchSource } from "./search-types";
+import type { EnrichedVideo, QuotaUsage, SearchSource, StoredSearchSource } from "./search-types";
 import type { ChannelTrend, VideoSample } from "./trend";
 import { estimateRevenue, type VideoCategory } from "./rpm";
 import { hasShortsSignal, matchesVideoFormat, type VideoFormatFilter } from "./video-format";
@@ -13,6 +13,17 @@ const VIDEO_TTL_MS = 12 * 60 * 60 * 1000;
 const SEARCH_TTL_MS = 12 * 60 * 60 * 1000;
 const DAILY_QUOTA_LIMIT = 10_000;
 const DAILY_QUOTA_GUARD = 9_000;
+const LOW_RESULT_SEARCH_THRESHOLD = 20;
+
+const QUERY_EXPANSIONS: Record<string, string[]> = {
+  ai: [
+    "artificial intelligence",
+    "chatgpt",
+    "generative ai",
+    "machine learning",
+    "automation",
+  ],
+};
 
 export interface SearchCacheOptions {
   query: string;
@@ -98,6 +109,7 @@ interface BrowseVideoRow extends VideoRow {
 }
 
 export interface BrowseFilters {
+  q?: string;
   minSubs?: number;
   maxSubs?: number;
   minViews?: number;
@@ -111,12 +123,25 @@ export interface BrowseFilters {
   limit?: number;
 }
 
+export interface CachedVideoSearchInput extends BrowseFilters {
+  page?: number;
+  pageSize?: number;
+}
+
+export interface CachedVideoSearchOutput {
+  results: EnrichedVideo[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 interface SearchCacheRow {
   keyword: string;
   filters_json: Record<string, unknown> | null;
   video_ids: string[] | null;
   results_count: number | null;
-  source: SearchSource | null;
+  source: StoredSearchSource | null;
   fetched_at: string | null;
 }
 
@@ -147,6 +172,105 @@ export const youtubeBatchUnits = (count: number): number =>
 
 export function isQuotaGuardActive(usage: QuotaUsage): boolean {
   return usage.configured && usage.used >= usage.guardAt;
+}
+
+function normalizeStoredSource(source: StoredSearchSource | null | undefined): SearchSource {
+  if (source === "mock") return "mock";
+  if (source === "youtube" || source === "youtube_refresh") return "youtube_refresh";
+  if (source === "database_youtube_refresh") return "database_youtube_refresh";
+  return "database";
+}
+
+function sanitizeSearchTerm(value: string): string {
+  return normalizeKeyword(value)
+    .replace(/[,%(){}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dbSearchTerms(query: string | undefined): {
+  textTerms: string[];
+  tagTerms: string[];
+  allTerms: string[];
+} {
+  const normalized = sanitizeSearchTerm(query ?? "");
+  if (!normalized) return { textTerms: [], tagTerms: [], allTerms: [] };
+
+  const expanded = [normalized, ...(QUERY_EXPANSIONS[normalized] ?? [])]
+    .map(sanitizeSearchTerm)
+    .filter(Boolean);
+  const allTerms = [...new Set(expanded)];
+  const textTerms =
+    normalized === "ai" ? allTerms.filter((term) => term !== "ai") : allTerms;
+  const tagTerms = allTerms.filter((term) => /^[a-z0-9_-]+$/.test(term));
+
+  return { textTerms, tagTerms, allTerms };
+}
+
+function textMatchScore(video: EnrichedVideo, terms: string[]): number {
+  if (terms.length === 0) return 0;
+
+  const title = video.title.toLowerCase();
+  const description = video.description.toLowerCase();
+  const tags = (video.tags ?? []).map((tag) => tag.toLowerCase());
+
+  return terms.reduce((score, term) => {
+    let next = score;
+    if (title === term) next += 8;
+    if (title.includes(term)) next += 5;
+    if (tags.some((tag) => tag === term || tag.includes(term))) next += 4;
+    if (description.includes(term)) next += 1;
+    return next;
+  }, 0);
+}
+
+function blendedSearchScore(video: EnrichedVideo, terms: string[]): number {
+  const text = textMatchScore(video, terms);
+  const outlier = Math.min(video.outlierScore, 25) / 25;
+  const views = Math.min(Math.log10(Math.max(video.views, 1)), 8) / 8;
+  const ageDays = Math.max(0, (Date.now() - new Date(video.publishedAt).getTime()) / 86_400_000);
+  const recency = Math.max(0, 1 - Math.min(ageDays, 365) / 365);
+  const subs = Math.max(video.channelSubs, 1);
+  const smallChannel = 1 - Math.min(Math.log10(subs), 7) / 7;
+
+  return text * 10 + outlier * 6 + recency * 3 + views * 2 + smallChannel * 2;
+}
+
+function sortCachedVideos(
+  videos: EnrichedVideo[],
+  filters: BrowseFilters,
+  searchTerms: string[],
+): EnrichedVideo[] {
+  return [...videos].sort((a, b) => {
+    switch (filters.sort) {
+      case "views":
+        return b.views - a.views;
+      case "date":
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+      case "subs":
+        return a.channelSubs - b.channelSubs;
+      case "outlier":
+      default:
+        if (searchTerms.length > 0) {
+          return blendedSearchScore(b, searchTerms) - blendedSearchScore(a, searchTerms);
+        }
+        return b.outlierScore - a.outlierScore;
+    }
+  });
+}
+
+function searchOrFilter(query: string | undefined): string | null {
+  const { textTerms, tagTerms } = dbSearchTerms(query);
+  const filters = [
+    ...textTerms.flatMap((term) => [
+      `title.ilike.%${term}%`,
+      `description.ilike.%${term}%`,
+      `channel_title.ilike.%${term}%`,
+    ]),
+    ...tagTerms.map((term) => `tags.cs.{${term}}`),
+  ];
+
+  return filters.length > 0 ? filters.join(",") : null;
 }
 
 export function buildSearchCacheKey(opts: SearchCacheOptions): string {
@@ -755,18 +879,38 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
 export async function browseCachedVideos(
   filters: BrowseFilters,
 ): Promise<EnrichedVideo[]> {
+  const page = await searchCachedVideos({
+    ...filters,
+    page: 1,
+    pageSize: filters.limit ?? 100,
+  });
+
+  return page.results;
+}
+
+export async function searchCachedVideos(
+  filters: CachedVideoSearchInput,
+): Promise<CachedVideoSearchOutput> {
   const client = getSupabaseAdmin();
   if (!client) throw new Error("Supabase is not configured for cached browsing");
 
-  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+  const page = Math.max(1, Math.floor(filters.page ?? 1));
+  const pageSize = Math.min(Math.max(Math.floor(filters.pageSize ?? filters.limit ?? 100), 1), 500);
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  const searchTerms = dbSearchTerms(filters.q).allTerms;
+
   const runQuery = (includeDurationSeconds: boolean) => {
     const durationColumn = includeDurationSeconds ? ",duration_seconds" : "";
     let query = client
       .from("videos")
       .select(
         `youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration${durationColumn},published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at,channels!inner(youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at)`,
+        { count: "exact" },
       );
 
+    const orFilter = searchOrFilter(filters.q);
+    if (orFilter) query = query.or(orFilter);
     if (filters.minSubs !== undefined) query = query.gte("channels.subs", filters.minSubs);
     if (filters.maxSubs !== undefined) query = query.lte("channels.subs", filters.maxSubs);
     if (filters.minViews !== undefined) query = query.gte("views", filters.minViews);
@@ -782,6 +926,12 @@ export async function browseCachedVideos(
       Number.isFinite(filters.maxDurationSeconds)
     ) {
       query = query.lte("duration_seconds", filters.maxDurationSeconds);
+    }
+    if (includeDurationSeconds && filters.format === "shorts") {
+      query = query.lte("duration_seconds", 60);
+    }
+    if (includeDurationSeconds && filters.format === "standard") {
+      query = query.gt("duration_seconds", 60);
     }
 
     switch (filters.sort) {
@@ -800,14 +950,19 @@ export async function browseCachedVideos(
         break;
     }
 
-    return query.limit(includeDurationSeconds ? limit : 500);
+    if (includeDurationSeconds) {
+      return query.range(from, to);
+    }
+
+    return query.range(0, Math.min(Math.max(to, 500), 2_000));
   };
 
-  let { data, error } = await runQuery(true);
+  let { data, error, count } = await runQuery(true);
   if (error && isMissingDurationSecondsColumn(error)) {
     const legacy = await runQuery(false);
     data = legacy.data;
     error = legacy.error;
+    count = legacy.count;
   }
   if (error) throw error;
 
@@ -816,7 +971,7 @@ export async function browseCachedVideos(
     return nested ? [hydrateVideoRow(row, nested)] : [];
   });
 
-  return hydrated
+  const filtered = hydrated
     .filter((video) => {
       if (
         filters.minDurationSeconds !== undefined &&
@@ -833,21 +988,18 @@ export async function browseCachedVideos(
       }
       if (!matchesVideoFormat(video, filters.format)) return false;
       return true;
-    })
-    .sort((a, b) => {
-      switch (filters.sort) {
-        case "views":
-          return b.views - a.views;
-        case "date":
-          return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
-        case "subs":
-          return a.channelSubs - b.channelSubs;
-        case "outlier":
-        default:
-          return b.outlierScore - a.outlierScore;
-      }
-    })
-    .slice(0, limit);
+    });
+  const sorted = sortCachedVideos(filtered, filters, searchTerms);
+  const results = sorted.slice(0, pageSize);
+  const totalCount = count ?? results.length;
+
+  return {
+    results,
+    totalCount,
+    page,
+    pageSize,
+    hasMore: page * pageSize < totalCount,
+  };
 }
 
 export async function getCachedSearch(
@@ -925,6 +1077,30 @@ export async function writeSearchCache(
     if (error) throw error;
   } catch (error) {
     console.warn("[cache] search write skipped", error);
+  }
+}
+
+export async function queueLowResultKeywordCandidate(
+  keyword: string,
+  matchCount: number,
+): Promise<void> {
+  const normalized = normalizeKeyword(keyword);
+  const client = getSupabaseAdmin();
+  if (!client || !normalized || matchCount >= LOW_RESULT_SEARCH_THRESHOLD) return;
+
+  try {
+    const { error } = await client.from("seed_keywords").upsert(
+      {
+        keyword: normalized,
+        category: null,
+        priority: 65,
+        source: "user_low_result",
+      },
+      { onConflict: "keyword", ignoreDuplicates: true },
+    );
+    if (error) throw error;
+  } catch (error) {
+    console.warn("[cache] low-result keyword candidate skipped", error);
   }
 }
 
@@ -1041,7 +1217,7 @@ export async function getLatestNicheSnapshot(
       keyword: row.keyword,
       filters: row.filters_json ?? {},
       fetchedAt: row.fetched_at ?? "",
-      source: row.source ?? "cache",
+      source: normalizeStoredSource(row.source),
       results,
     };
   } catch (error) {
