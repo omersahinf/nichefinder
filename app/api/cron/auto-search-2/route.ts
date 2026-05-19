@@ -17,7 +17,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
     const result = await runAutoSearch({
       maxKeywords: 30,
-      source: "cron_auto_search",
+      source: "cron_auto_search_2",
     });
     return NextResponse.json(result);
   } catch (error) {
