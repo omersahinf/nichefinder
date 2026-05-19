@@ -273,7 +273,10 @@ export async function runAiVerticalStrategist(): Promise<KeywordDiscoveryResult>
     maxTokens: 8192,
     temperature: 0.85,
     estimatedUsd: 0.02,
-    extraBody: { extra_body: { enable_thinking: true } },
+    extraBody: {
+      reasoning_effort: "low",
+      extra_body: { enable_thinking: false },
+    },
     system:
       "You are a YouTube niche discovery strategist. Return JSON only. Favor diverse, non-obvious evergreen niches and avoid simple suffix variations.",
     user: JSON.stringify({

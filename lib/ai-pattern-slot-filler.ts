@@ -136,7 +136,10 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
     maxTokens: 8192,
     temperature: 0.8,
     estimatedUsd: 0.02,
-    extraBody: { extra_body: { enable_thinking: true } },
+    extraBody: {
+      reasoning_effort: "low",
+      extra_body: { enable_thinking: false },
+    },
     system:
       "You fill viral YouTube title pattern slots with high-discovery sub-niches. Return JSON only.",
     user: JSON.stringify({
