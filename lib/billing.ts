@@ -1,6 +1,17 @@
 import Stripe from "stripe";
 import { countTodayTitleGenerations } from "./ai/title-gen";
+import { isAdminEmail } from "./auth";
 import { getSupabaseAdmin } from "./supabase";
+
+async function isAdminUser(userId: string): Promise<boolean> {
+  const allowed = (process.env.ADMIN_EMAILS ?? "").trim();
+  if (!allowed) return false;
+  const client = getSupabaseAdmin();
+  if (!client) return false;
+  const { data, error } = await client.auth.admin.getUserById(userId);
+  if (error) return false;
+  return isAdminEmail(data.user?.email ?? undefined);
+}
 
 export type SubscriptionPlan = "free" | "pro_monthly" | "pro_yearly";
 export type EntitlementPlan = "free" | "pro";
@@ -283,6 +294,10 @@ export async function enforceQuota(userId: string | undefined, action: QuotaActi
       action === "idea_generation"
       ? { allowed: false, plan: "free", reason: "Login required" }
       : { allowed: true, plan: "free" };
+  }
+
+  if (await isAdminUser(userId)) {
+    return { allowed: true, plan: "pro" };
   }
 
   const subscription = await getSubscriptionByUserId(userId);
