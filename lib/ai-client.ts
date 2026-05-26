@@ -1,4 +1,6 @@
+import { createHash } from "crypto";
 import { checkAiBudget, recordAiUsage } from "./budget-cap";
+import { getSupabaseAdmin } from "./supabase";
 
 export interface AiJsonOptions {
   job: string;
@@ -8,6 +10,7 @@ export interface AiJsonOptions {
   temperature?: number;
   estimatedUsd?: number;
   extraBody?: Record<string, unknown>;
+  cacheTtlSeconds?: number;
 }
 
 export interface AiJsonResult<T> {
@@ -17,6 +20,7 @@ export interface AiJsonResult<T> {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  cached?: boolean;
 }
 
 interface OpenAiCompatibleResponse {
@@ -34,6 +38,14 @@ interface OpenAiCompatibleResponse {
   error?: {
     message?: string;
   };
+}
+
+interface ProviderConfig {
+  name: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  fallbackModel?: string;
 }
 
 export function aiConfig(): {
@@ -60,6 +72,79 @@ export function aiConfig(): {
     model: process.env.AI_MODEL?.trim() || "qwen3.6-plus",
     fallbackModel: process.env.AI_FALLBACK_MODEL?.trim() || undefined,
   };
+}
+
+function resolveProviders(): ProviderConfig[] {
+  const providersEnv = process.env.AI_PROVIDERS?.trim();
+  const names = providersEnv
+    ? providersEnv.split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+
+  const base = aiConfig();
+  const primaryConfig: ProviderConfig | null = base.apiKey
+    ? {
+        name: base.provider,
+        apiKey: base.apiKey,
+        baseUrl: base.baseUrl,
+        model: base.model,
+        fallbackModel: base.fallbackModel,
+      }
+    : null;
+
+  if (!names) {
+    return primaryConfig ? [primaryConfig] : [];
+  }
+
+  return names.flatMap((name): ProviderConfig[] => {
+    if (name === "cached") return [];
+    if (name === base.provider && primaryConfig) return [primaryConfig];
+    const apiKey =
+      name === "openrouter"
+        ? process.env.OPENROUTER_API_KEY?.trim()
+        : process.env.AI_API_KEY?.trim();
+    if (!apiKey) return [];
+    return [
+      {
+        name,
+        apiKey,
+        baseUrl: process.env.AI_BASE_URL?.trim() || base.baseUrl,
+        model: base.model,
+        fallbackModel: base.fallbackModel,
+      },
+    ];
+  });
+}
+
+function promptHash(system: string, user: string): string {
+  return createHash("sha256").update(`${system}\n\n${user}`).digest("hex");
+}
+
+async function readCache(hash: string): Promise<unknown | null> {
+  const client = getSupabaseAdmin();
+  if (!client) return null;
+  const { data } = await client
+    .from("ai_response_cache")
+    .select("result_json")
+    .eq("prompt_hash", hash)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ? (data.result_json as unknown) : null;
+}
+
+async function writeCache(
+  hash: string,
+  job: string,
+  result: unknown,
+  ttlSeconds: number,
+): Promise<void> {
+  const client = getSupabaseAdmin();
+  if (!client) return;
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+  await client
+    .from("ai_response_cache")
+    .insert({ prompt_hash: hash, job, result_json: result, expires_at: expiresAt });
 }
 
 function parseCompletedKeywordObjects(jsonLike: string): unknown | null {
@@ -152,20 +237,11 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "");
 }
 
-export async function generateAiJson<T>(options: AiJsonOptions): Promise<AiJsonResult<T>> {
-  const config = aiConfig();
-  if (!config.apiKey) {
-    throw new Error("AI_API_KEY, OPENROUTER_API_KEY, DASHSCOPE_API_KEY, or GEMINI_API_KEY missing");
-  }
-
-  const budget = await checkAiBudget(options.estimatedUsd ?? 0.01);
-  if (!budget.allowed) {
-    throw new Error(budget.reason ?? "AI budget cap reached");
-  }
-
-  const requestModel = async (
-    model: string,
-  ): Promise<{ model: string; result: OpenAiCompatibleResponse; text: string }> => {
+async function callProvider(
+  provider: ProviderConfig,
+  options: AiJsonOptions,
+): Promise<{ model: string; result: OpenAiCompatibleResponse; text: string }> {
+  const tryModel = async (model: string) => {
     const body = {
       model,
       messages: [
@@ -178,10 +254,10 @@ export async function generateAiJson<T>(options: AiJsonOptions): Promise<AiJsonR
       ...options.extraBody,
     };
 
-    const response = await fetch(`${normalizeBaseUrl(config.baseUrl)}/chat/completions`, {
+    const response = await fetch(`${normalizeBaseUrl(provider.baseUrl)}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${provider.apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -190,64 +266,90 @@ export async function generateAiJson<T>(options: AiJsonOptions): Promise<AiJsonR
     const result = (await response.json()) as OpenAiCompatibleResponse;
     if (!response.ok) {
       const detail = result.error?.message ? ` - ${result.error.message}` : "";
-      throw new Error(`AI request failed for ${model}: ${response.status}${detail}`);
+      throw new Error(`AI request failed [${provider.name}/${model}]: ${response.status}${detail}`);
     }
 
-    return {
-      model,
-      result,
-      text: result.choices?.[0]?.message?.content ?? "",
-    };
+    return { model, result, text: result.choices?.[0]?.message?.content ?? "" };
   };
 
-  const fallbackModel =
-    config.fallbackModel && config.fallbackModel !== config.model ? config.fallbackModel : undefined;
+  const fallback =
+    provider.fallbackModel && provider.fallbackModel !== provider.model
+      ? provider.fallbackModel
+      : undefined;
 
-  let completion: { model: string; result: OpenAiCompatibleResponse; text: string };
   try {
-    completion = await requestModel(config.model);
-  } catch (error) {
-    if (!fallbackModel) throw error;
-    console.warn("[ai] primary model failed, retrying fallback", {
-      primaryModel: config.model,
-      fallbackModel,
-      message: error instanceof Error ? error.message : String(error),
+    return await tryModel(provider.model);
+  } catch (primaryError) {
+    if (!fallback) throw primaryError;
+    console.warn("[ai] primary model failed, trying fallback", {
+      provider: provider.name,
+      primaryModel: provider.model,
+      fallbackModel: fallback,
+      message: primaryError instanceof Error ? primaryError.message : String(primaryError),
     });
-    completion = await requestModel(fallbackModel);
+    return await tryModel(fallback);
+  }
+}
+
+export async function generateAiJson<T>(options: AiJsonOptions): Promise<AiJsonResult<T>> {
+  const budget = await checkAiBudget(options.estimatedUsd ?? 0.01);
+  if (!budget.allowed) {
+    throw new Error(budget.reason ?? "AI budget cap reached");
   }
 
-  let data: T;
-  try {
-    data = extractJson(completion.text) as T;
-  } catch (error) {
-    if (!fallbackModel || completion.model === fallbackModel) throw error;
-    console.warn("[ai] primary model returned invalid JSON, retrying fallback", {
-      primaryModel: completion.model,
-      fallbackModel,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    completion = await requestModel(fallbackModel);
-    data = extractJson(completion.text) as T;
+  const providers = resolveProviders();
+  const hash = promptHash(options.system, options.user);
+  const cacheTtl = options.cacheTtlSeconds ?? 7 * 24 * 3600;
+  const useCache = process.env.AI_PROVIDERS?.includes("cached") ?? false;
+
+  const errors: string[] = [];
+
+  for (const provider of providers) {
+    try {
+      const completion = await callProvider(provider, options);
+      const data = extractJson(completion.text) as T;
+
+      if (useCache) {
+        writeCache(hash, options.job, data, cacheTtl).catch(() => {});
+      }
+
+      const inputTokens =
+        completion.result.usage?.prompt_tokens ?? completion.result.usage?.input_tokens ?? 0;
+      const outputTokens =
+        completion.result.usage?.completion_tokens ?? completion.result.usage?.output_tokens ?? 0;
+      const costUsd = await recordAiUsage({
+        provider: provider.name,
+        model: completion.model,
+        job: options.job,
+        inputTokens,
+        outputTokens,
+        metadata: { baseUrl: provider.baseUrl, primaryModel: provider.model },
+      });
+
+      return { data, provider: provider.name, model: completion.model, inputTokens, outputTokens, costUsd };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`[${provider.name}] ${msg}`);
+      console.warn(`[ai] provider ${provider.name} failed:`, msg);
+    }
   }
 
-  const inputTokens = completion.result.usage?.prompt_tokens ?? completion.result.usage?.input_tokens ?? 0;
-  const outputTokens =
-    completion.result.usage?.completion_tokens ?? completion.result.usage?.output_tokens ?? 0;
-  const costUsd = await recordAiUsage({
-    provider: config.provider,
-    model: completion.model,
-    job: options.job,
-    inputTokens,
-    outputTokens,
-    metadata: { baseUrl: config.baseUrl, primaryModel: config.model, fallbackModel },
-  });
+  // All live providers failed — try cache
+  if (useCache) {
+    const cached = await readCache(hash);
+    if (cached) {
+      console.warn("[ai] all providers failed, serving cached response", { job: options.job });
+      return {
+        data: cached as T,
+        provider: "cached",
+        model: "cached",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        cached: true,
+      };
+    }
+  }
 
-  return {
-    data,
-    provider: config.provider,
-    model: completion.model,
-    inputTokens,
-    outputTokens,
-    costUsd,
-  };
+  throw new Error(`All AI providers failed for job ${options.job}: ${errors.join("; ")}`);
 }

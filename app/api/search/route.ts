@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchAndEnrich } from "@/lib/youtube";
 import { computeSaturation } from "@/lib/saturation";
+import { computeNicheDecision } from "@/lib/niche-decision";
 import {
   getTodayQuotaUsage,
   isQuotaGuardActive,
@@ -94,6 +95,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
 
     const saturation = computeSaturation(dbPage.results);
+    const decision = computeNicheDecision(saturation);
     const quota = await getTodayQuotaUsage();
 
     return NextResponse.json({
@@ -114,6 +116,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       fetchedAt,
       results: dbPage.results,
       saturation,
+      decision,
     });
   } catch (err) {
     const msg =

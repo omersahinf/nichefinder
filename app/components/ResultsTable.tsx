@@ -1,9 +1,10 @@
-// app/components/ResultsTable.tsx
 "use client";
 
 import { useState, useMemo } from "react";
+import type { ReactNode } from "react";
 import type { EnrichedVideo } from "@/lib/search-types";
 import { formatDurationLabel } from "@/lib/duration";
+import { buildOutlierExplanation } from "@/lib/outlier-reasons";
 import { TrendSparkline } from "@/app/components/charts";
 import { Panel, PanelHeader, OutlierBadge, Badge } from "./ui";
 
@@ -33,6 +34,7 @@ interface Props {
   totalCount: number;
   pageSize: number;
   onExportCsv: () => void;
+  viewToggle?: React.ReactNode;
 }
 
 function SortButton({
@@ -62,7 +64,156 @@ function SortButton({
   );
 }
 
-export function ResultsTable({ videos, showRevenue, source, totalCount, pageSize, onExportCsv }: Props) {
+interface VideoTableRowProps {
+  video: EnrichedVideo;
+  index: number;
+  showRevenue: boolean;
+  source: string | null;
+  hovered: boolean;
+  onHover: (id: string | null) => void;
+  videoBadges: (v: EnrichedVideo) => string[];
+}
+
+function VideoTableRow({ video: v, index: i, showRevenue, source, hovered, onHover, videoBadges }: VideoTableRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const badges = videoBadges(v);
+  const videoUrl = source !== "mock" ? `https://youtube.com/watch?v=${v.id}` : undefined;
+  const explanation = buildOutlierExplanation(v);
+
+  const colSpan = 8 + (showRevenue ? 1 : 0) + 3;
+
+  return (
+    <>
+      <tr
+        onMouseEnter={() => onHover(v.id)}
+        onMouseLeave={() => onHover(null)}
+        className={`border-b border-neutral-800/60 transition-colors ${
+          hovered ? "bg-neutral-800/30" : i % 2 === 0 ? "bg-transparent" : "bg-neutral-900/20"
+        }`}
+      >
+        {/* Thumbnail + title */}
+        <td className="px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <a
+              href={videoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => !videoUrl && e.preventDefault()}
+              className="relative h-10 w-16 flex-shrink-0 overflow-hidden rounded bg-neutral-800 block"
+            >
+              {v.thumbnail && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={v.thumbnail} alt="" className="h-full w-full object-cover" />
+              )}
+              <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-0.5 text-[9px] font-mono text-white">
+                {formatDurationLabel(v.durationSeconds ?? 0)}
+              </span>
+            </a>
+            <div className="min-w-0">
+              <a
+                href={videoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={e => !videoUrl && e.preventDefault()}
+                className="line-clamp-2 max-w-xs text-xs font-medium text-neutral-100 leading-snug hover:text-red-300 transition-colors"
+              >
+                {v.title}
+              </a>
+              <div className="mt-0.5 text-[11px] text-neutral-500 truncate max-w-xs">{v.channelTitle}</div>
+              {badges.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {badges.slice(0, 2).map(b => <Badge key={b} label={b} />)}
+                </div>
+              )}
+            </div>
+          </div>
+        </td>
+        {/* Subs */}
+        <td className="px-3 py-2.5 text-right font-mono text-xs text-neutral-400">
+          {fmt(v.channelSubs)}
+        </td>
+        {/* Views */}
+        <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-neutral-200">
+          {fmt(v.views)}
+        </td>
+        {/* Outlier */}
+        <td className="px-3 py-2.5 text-right">
+          <OutlierBadge score={v.outlierScore} />
+        </td>
+        {/* Duration */}
+        <td className="hidden px-3 py-2.5 text-left font-mono text-xs text-neutral-500 lg:table-cell">
+          {formatDurationLabel(v.durationSeconds ?? 0)}
+        </td>
+        {/* Published */}
+        <td className="hidden px-3 py-2.5 text-left text-xs text-neutral-500 lg:table-cell">
+          {daysAgo(v.publishedAt)}
+        </td>
+        {/* Category */}
+        <td className="hidden px-3 py-2.5 xl:table-cell">
+          {v.category && (
+            <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+              {v.category}
+            </span>
+          )}
+        </td>
+        {/* Revenue */}
+        {showRevenue && (
+          <td className="px-3 py-2.5 text-right font-mono text-xs text-amber-400">
+            {typeof v.estimatedRevenueUsd === "number"
+              ? fmtUsd(Math.round(v.estimatedRevenueUsd))
+              : "—"}
+          </td>
+        )}
+        {/* Reason */}
+        <td className="hidden px-3 py-2.5 xl:table-cell max-w-[200px]">
+          <span className="line-clamp-2 text-[11px] text-neutral-500 leading-snug">
+            {v.outlierReason}
+          </span>
+        </td>
+        {/* Trend sparkline */}
+        <td className="hidden px-3 py-2.5 text-center lg:table-cell">
+          {v.channelTrend && <TrendSparkline trend={v.channelTrend} />}
+        </td>
+        {/* Expand toggle */}
+        <td className="px-2 py-2.5 text-right">
+          <button
+            type="button"
+            onClick={() => setExpanded(e => !e)}
+            className={`text-xs transition-colors ${hovered ? "text-neutral-300" : "text-neutral-600"}`}
+            title={expanded ? "Collapse explanation" : "Expand explanation"}
+          >
+            {expanded ? "▲" : "▼"}
+          </button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-b border-neutral-800/40 bg-neutral-900/40">
+          <td colSpan={colSpan} className="px-4 py-2.5">
+            <div className="flex flex-wrap items-start gap-3">
+              <span className="text-[11px] font-medium text-neutral-300">{explanation.summary}</span>
+              {explanation.factors.map((f, idx) => (
+                <span
+                  key={idx}
+                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium border ${
+                    f.signal === "positive"
+                      ? "bg-green-500/10 text-green-300 border-green-500/20"
+                      : f.signal === "note"
+                      ? "bg-neutral-800 text-neutral-400 border-neutral-700"
+                      : "bg-neutral-800/50 text-neutral-500 border-neutral-700/50"
+                  }`}
+                >
+                  <span className="opacity-60">{f.label}:</span> {f.value}
+                </span>
+              ))}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+export function ResultsTable({ videos, showRevenue, source, totalCount, pageSize, onExportCsv, viewToggle }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("server");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [hovered, setHovered] = useState<string | null>(null);
@@ -109,6 +260,7 @@ export function ResultsTable({ videos, showRevenue, source, totalCount, pageSize
         sub={`${videos.length} of ${totalCount.toLocaleString()} videos · ${pageSize}/page`}
         actions={
           <div className="flex items-center gap-2">
+            {viewToggle}
             {source === "mock" && (
               <span className="rounded border border-amber-900 bg-amber-950/40 px-2 py-0.5 text-[10px] font-medium text-amber-300">
                 Mock data
@@ -166,112 +318,18 @@ export function ResultsTable({ videos, showRevenue, source, totalCount, pageSize
             </tr>
           </thead>
           <tbody>
-            {sorted.map((v, i) => {
-              const badges = videoBadges(v);
-              const videoUrl = source !== "mock" ? `https://youtube.com/watch?v=${v.id}` : undefined;
-              return (
-                <tr
-                  key={v.id}
-                  onMouseEnter={() => setHovered(v.id)}
-                  onMouseLeave={() => setHovered(null)}
-                  className={`border-b border-neutral-800/60 transition-colors ${
-                    hovered === v.id
-                      ? "bg-neutral-800/30"
-                      : i % 2 === 0 ? "bg-transparent" : "bg-neutral-900/20"
-                  }`}
-                >
-                  {/* Thumbnail + title */}
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-3">
-                      <a
-                        href={videoUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={e => !videoUrl && e.preventDefault()}
-                        className="relative h-10 w-16 flex-shrink-0 overflow-hidden rounded bg-neutral-800 block"
-                      >
-                        {v.thumbnail && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={v.thumbnail} alt="" className="h-full w-full object-cover" />
-                        )}
-                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-0.5 text-[9px] font-mono text-white">
-                          {formatDurationLabel(v.durationSeconds ?? 0)}
-                        </span>
-                      </a>
-                      <div className="min-w-0">
-                        <a
-                          href={videoUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={e => !videoUrl && e.preventDefault()}
-                          className="line-clamp-2 max-w-xs text-xs font-medium text-neutral-100 leading-snug hover:text-red-300 transition-colors"
-                        >
-                          {v.title}
-                        </a>
-                        <div className="mt-0.5 text-[11px] text-neutral-500 truncate max-w-xs">{v.channelTitle}</div>
-                        {badges.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {badges.slice(0, 2).map(b => <Badge key={b} label={b} />)}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </td>
-                  {/* Subs */}
-                  <td className="px-3 py-2.5 text-right font-mono text-xs text-neutral-400">
-                    {fmt(v.channelSubs)}
-                  </td>
-                  {/* Views */}
-                  <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-neutral-200">
-                    {fmt(v.views)}
-                  </td>
-                  {/* Outlier */}
-                  <td className="px-3 py-2.5 text-right">
-                    <OutlierBadge score={v.outlierScore} />
-                  </td>
-                  {/* Duration */}
-                  <td className="hidden px-3 py-2.5 text-left font-mono text-xs text-neutral-500 lg:table-cell">
-                    {formatDurationLabel(v.durationSeconds ?? 0)}
-                  </td>
-                  {/* Published */}
-                  <td className="hidden px-3 py-2.5 text-left text-xs text-neutral-500 lg:table-cell">
-                    {daysAgo(v.publishedAt)}
-                  </td>
-                  {/* Category */}
-                  <td className="hidden px-3 py-2.5 xl:table-cell">
-                    {v.category && (
-                      <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
-                        {v.category}
-                      </span>
-                    )}
-                  </td>
-                  {/* Revenue */}
-                  {showRevenue && (
-                    <td className="px-3 py-2.5 text-right font-mono text-xs text-amber-400">
-                      {typeof v.estimatedRevenueUsd === "number"
-                        ? fmtUsd(Math.round(v.estimatedRevenueUsd))
-                        : "—"}
-                    </td>
-                  )}
-                  {/* Reason */}
-                  <td className="hidden px-3 py-2.5 xl:table-cell max-w-[200px]">
-                    <span className="line-clamp-2 text-[11px] text-neutral-500 leading-snug">
-                      {v.outlierReason}
-                    </span>
-                  </td>
-                  {/* Trend sparkline */}
-                  <td className="hidden px-3 py-2.5 text-center lg:table-cell">
-                    {v.channelTrend && <TrendSparkline trend={v.channelTrend} />}
-                  </td>
-                  {/* Arrow */}
-                  <td className="px-2 py-2.5 text-right">
-                    <span className={`text-xs transition-colors ${hovered === v.id ? "text-neutral-300" : "text-neutral-700"}`}>
-                      →
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
+            {sorted.map((v, i) => (
+              <VideoTableRow
+                key={v.id}
+                video={v}
+                index={i}
+                showRevenue={showRevenue}
+                source={source}
+                hovered={hovered === v.id}
+                onHover={setHovered}
+                videoBadges={videoBadges}
+              />
+            ))}
           </tbody>
         </table>
       </div>

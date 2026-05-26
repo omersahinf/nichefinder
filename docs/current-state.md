@@ -1,5 +1,17 @@
 # Current State
 
+## 2026-05-27
+
+Active focus:
+
+- Vercel cron daily quota utilization was adjusted for higher YouTube API efficiency:
+  - `DAILY_QUOTA_GUARD` increased from 9,000 to 9,700 while the hard daily limit remains 10,000.
+  - Auto-search cron handlers were split into 9 daily shards: `/api/cron/auto-search` through `/api/cron/auto-search-9`.
+  - Auto-search shards now run every 15 minutes from `05:20 UTC` through `07:20 UTC`, with `grow-tune` moved to `07:30 UTC`.
+  - Existing per-keyword quota guard remains active, so later shards should stop naturally once the day approaches the guard.
+  - Verification: `vercel.json` parsed successfully, `npx tsc --noEmit` passed, and targeted ESLint for touched cron/cache files passed.
+  - Full `npm run lint` still fails on pre-existing unrelated issues in `app/niche/[slug]/share/page.tsx` and unused warnings in other files.
+
 ## 2026-05-18
 
 Active focus:

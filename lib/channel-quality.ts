@@ -146,13 +146,20 @@ export async function runChannelQualityScoring(): Promise<KeywordDiscoveryResult
   }
 
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: videoData, error: videoError } = await client
-    .from("videos")
-    .select("channel_id,title,views,outlier_score,published_at")
-    .in("channel_id", channelIds)
-    .gte("published_at", since)
-    .limit(20_000);
-  if (videoError) throw videoError;
+  // Batch .in() to avoid Supabase URL length limit (max ~500 IDs per request)
+  const CHUNK = 500;
+  const videoData: VideoRow[] = [];
+  for (let i = 0; i < channelIds.length; i += CHUNK) {
+    const chunk = channelIds.slice(i, i + CHUNK);
+    const { data, error: videoError } = await client
+      .from("videos")
+      .select("channel_id,title,views,outlier_score,published_at")
+      .in("channel_id", chunk)
+      .gte("published_at", since)
+      .limit(10_000);
+    if (videoError) throw videoError;
+    videoData.push(...((data ?? []) as VideoRow[]));
+  }
 
   const videosByChannel = new Map<string, VideoRow[]>();
   for (const video of (videoData ?? []) as VideoRow[]) {

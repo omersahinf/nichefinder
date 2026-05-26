@@ -5,20 +5,48 @@
       "schedule": "0 3 * * *"
     },
     {
-      "path": "/api/cron/auto-search",
-      "schedule": "0 5 * * *"
-    },
-    {
-      "path": "/api/cron/auto-search-2",
-      "schedule": "15 5 * * *"
-    },
-    {
       "path": "/api/cron/keyword-discovery",
       "schedule": "0 5 * * *"
     },
     {
+      "path": "/api/cron/auto-search",
+      "schedule": "20 5 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-2",
+      "schedule": "35 5 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-3",
+      "schedule": "50 5 * * *"
+    },
+    {
       "path": "/api/cron/keyword-ai",
       "schedule": "0 6 * * 0"
+    },
+    {
+      "path": "/api/cron/auto-search-4",
+      "schedule": "5 6 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-5",
+      "schedule": "20 6 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-6",
+      "schedule": "35 6 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-7",
+      "schedule": "50 6 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-8",
+      "schedule": "5 7 * * *"
+    },
+    {
+      "path": "/api/cron/auto-search-9",
+      "schedule": "20 7 * * *"
     },
     {
       "path": "/api/cron/grow-discover",
@@ -30,7 +58,11 @@
     },
     {
       "path": "/api/cron/grow-tune",
-      "schedule": "0 6 * * *"
+      "schedule": "30 7 * * *"
+    },
+    {
+      "path": "/api/cron/watchlist-snapshot",
+      "schedule": "0 7 * * 0"
     }
   ]
 }

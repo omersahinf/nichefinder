@@ -112,31 +112,31 @@ function promptForNicheInsight(input: {
   const trendLine =
     input.trendSummary.averageGrowth30d === null
       ? "Trend data: limited"
-      : `Trend data: ${input.trendSummary.rising} rising, ${input.trendSummary.flat} flat, ${input.trendSummary.falling} falling channels, avg growth ${(input.trendSummary.averageGrowth30d * 100).toFixed(0)}% over 30d`;
+      : `${input.trendSummary.rising} rising, ${input.trendSummary.flat} flat, ${input.trendSummary.falling} falling channels; avg 30d growth ${(input.trendSummary.averageGrowth30d * 100).toFixed(0)}%`;
 
   return [
-    "You are analyzing a YouTube niche dataset for product research.",
-    "Return strict JSON with this schema only:",
-    '{"analysis":["Sentence 1","Sentence 2","Sentence 3","Sentence 4","Sentence 5"]}',
-    "Rules:",
-    "- Exactly 5 sentences.",
-    "- Each sentence must be concise, factual, and written in English.",
-    "- Cover: why the niche is working, who the audience likely is, what title/package pattern is visible, how crowded the niche looks, and one content opportunity.",
-    "- Ground claims only in the supplied data. If evidence is weak, say so.",
+    "You are a YouTube niche analyst. Return ONLY a JSON object with this exact schema:",
+    '{"analysis":["VERDICT: ...", "FORMAT: ...", "TITLES: ...", "RISK: ..."]}',
     "",
-    `Keyword: ${input.keyword}`,
-    `Sample size: ${input.sampleSize} cached videos`,
-    input.snapshotFetchedAt ? `Snapshot fetched at: ${input.snapshotFetchedAt}` : "",
-    `Saturation: ${input.saturation.label} (${input.saturation.hint})`,
-    `Median subscribers: ${Math.round(input.saturation.medianSubs)}`,
-    `Average outlier score: ${input.saturation.avgOutlier.toFixed(1)}x`,
-    `Small channel ratio: ${(input.saturation.smallChannelRatio * 100).toFixed(0)}%`,
-    `Small channel outlier ratio: ${(input.saturation.smallOutlierRatio * 100).toFixed(0)}%`,
+    "Rules:",
+    "- Exactly 4 items in analysis array. Each starts with its label.",
+    "- VERDICT: One sentence. Should the creator enter, test, or avoid this niche? Why.",
+    "- FORMAT: One sentence. What video format/angle appears to work best (length, style, hook type)?",
+    "- TITLES: One sentence. What title pattern do top outliers share? Give one example.",
+    "- RISK: One sentence. Main risk, challenge, or red flag for this niche.",
+    "- Use only supplied data. Keep each item under 180 chars.",
+    "",
+    `Niche keyword: ${input.keyword}`,
+    `Sample: ${input.sampleSize} videos`,
+    `Saturation: ${input.saturation.label} — ${input.saturation.hint}`,
+    `Median channel subs: ${Math.round(input.saturation.medianSubs).toLocaleString()}`,
+    `Avg outlier score: ${input.saturation.avgOutlier.toFixed(1)}x`,
+    `Small-channel outlier rate: ${(input.saturation.smallOutlierRatio * 100).toFixed(0)}%`,
     `Top categories: ${input.topCategories.join(", ") || "n/a"}`,
-    trendLine,
-    `Estimated revenue across top 10 videos: $${Math.round(input.totalEstimatedRevenue)}`,
+    `Trends: ${trendLine}`,
+    `Estimated revenue (top 10 videos): $${Math.round(input.totalEstimatedRevenue)}`,
     "Top outlier titles:",
-    ...input.topTitles.map((title, index) => `${index + 1}. ${title}`),
+    ...input.topTitles.slice(0, 10).map((title, index) => `${index + 1}. ${title}`),
   ]
     .filter(Boolean)
     .join("\n");

@@ -290,7 +290,7 @@ export async function runUploadsDeepScan({
       },
       { onConflict: "channel_id" },
     );
-    if (scanError) throw scanError;
+    if (scanError) throw new Error(`channel_deep_scans upsert failed for ${seed.channelId}: ${scanError.message}`);
   }
 
   await recordApiUsage(

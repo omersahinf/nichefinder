@@ -72,7 +72,7 @@ function createBadge(data) {
         Views: ${formatNumber(v.views || 0)}
         ${v.estimatedRevenueUsd ? `<br>Est. revenue: $${formatNumber(v.estimatedRevenueUsd)}` : ''}
       </div>
-      <a href="https://nichefinder.ai/niche/${encodeURIComponent(v.keyword || v.title || 'video')}?q=${encodeURIComponent(v.keyword || v.title || '')}" target="_blank" style="margin-top: 8px; display: inline-block; color: #f87171; font-size: 12px;">Open in NicheFinder</a>
+      <a href="https://nichefinder.ai/url?url=${encodeURIComponent(window.location.href)}" target="_blank" style="margin-top: 8px; display: inline-block; color: #f87171; font-size: 12px;">Full report on NicheFinder →</a>
     `;
   } else if (data.channel) {
     const c = data.channel;
@@ -82,7 +82,7 @@ function createBadge(data) {
         ${c.title || 'Channel'}
         <br>Subs: ${formatNumber(c.subs || 0)}
       </div>
-      <a href="https://nichefinder.ai/admin/seeds?channelUrl=${encodeURIComponent(window.location.href)}" target="_blank" style="margin-top: 8px; display: inline-block; color: #f87171; font-size: 12px;">Add to seeds</a>
+      <a href="https://nichefinder.ai/channel/${encodeURIComponent(c.channelId || '')}" target="_blank" style="margin-top: 8px; display: inline-block; color: #f87171; font-size: 12px;">View on NicheFinder →</a>
     `;
   } else {
     badge.innerHTML = `

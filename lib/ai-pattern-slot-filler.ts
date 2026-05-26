@@ -112,16 +112,20 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
   if (patternError) throw patternError;
   if (keywordError) throw keywordError;
 
-  const patterns = ((patternRows ?? []) as PatternRow[]).filter((row) =>
-    row.pattern.includes("{topic}"),
-  );
+  const allPatterns = (patternRows ?? []) as PatternRow[];
+  const patterns = allPatterns.filter((row) => row.pattern.includes("{topic}"));
   if (patterns.length === 0) {
-    await logDiscovery("ai:pattern-slot-filler", 0, 0, { skipped: "no_slot_patterns" });
+    const reason = allPatterns.length === 0 ? "no_patterns_in_db" : "no_slot_patterns_with_topic";
+    await logDiscovery("ai:pattern-slot-filler", 0, 0, {
+      skipped: reason,
+      totalPatternsInDb: allPatterns.length,
+      samplePatterns: allPatterns.slice(0, 5).map((r) => r.pattern),
+    });
     return {
       job: "ai:pattern-slot-filler",
       candidatesFound: 0,
       candidatesAdded: 0,
-      metadata: { skipped: "no_slot_patterns" },
+      metadata: { skipped: reason, totalPatternsInDb: allPatterns.length },
     };
   }
 
@@ -161,7 +165,8 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
     }),
   });
 
-  const candidates = parseCandidates(ai.data).filter((candidate) => !existing.has(candidate.keyword));
+  const allCandidates = parseCandidates(ai.data);
+  const candidates = allCandidates.filter((candidate) => !existing.has(candidate.keyword));
   const rowsToInsert = candidates.slice(0, 180).map((candidate) => ({
     keyword: candidate.keyword,
     category: candidate.category,
@@ -185,6 +190,8 @@ export async function runAiPatternSlotFiller(): Promise<KeywordDiscoveryResult> 
     model: ai.model,
     costUsd: ai.costUsd,
     patterns: patterns.length,
+    aiRawCount: allCandidates.length,
+    filteredByDuplicate: allCandidates.length - candidates.length,
     reasons: candidates.slice(0, 20).map((candidate) => ({
       keyword: candidate.keyword,
       reason: candidate.reason ?? null,

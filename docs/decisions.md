@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-05-27
+
+- Use more of the daily YouTube quota by raising the application quota guard to 9,700 and sharding production auto-search across 9 Vercel cron invocations.
+  - Rationale: Vercel cron executions share the same serverless timeout as normal functions, and observed production auto-search runs process only about 10-12 keywords before the 60-second window ends. Multiple staggered shards let the existing `seed_keywords.last_searched_at` ordering and quota guard consume the daily budget without one long-running job.
+  - Keep the hard API limit at 10,000 and retain the pre-search guard check so late shards stop before exhausting quota.
+
 ## 2026-05-15
 
 - Make the main search experience DB-first, paginated, and filter-only capable.

@@ -55,3 +55,5 @@ export interface QuotaUsage {
   remaining: number;
   guardAt: number;
 }
+
+export type { ChannelGroup } from "./group-by-channel";

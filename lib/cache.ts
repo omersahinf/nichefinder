@@ -12,7 +12,7 @@ const CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
 const VIDEO_TTL_MS = 12 * 60 * 60 * 1000;
 const SEARCH_TTL_MS = 12 * 60 * 60 * 1000;
 const DAILY_QUOTA_LIMIT = 10_000;
-const DAILY_QUOTA_GUARD = 9_000;
+const DAILY_QUOTA_GUARD = 9_700;
 const LOW_RESULT_SEARCH_THRESHOLD = 20;
 
 const QUERY_EXPANSIONS: Record<string, string[]> = {
