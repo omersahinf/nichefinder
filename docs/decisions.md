@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-06-16
+
+- Use evidence-first niche graph discovery for growth automation.
+  - Daily discovery now builds `niche_candidates` only from clean long-form niche videos and non-junk channels, scores repeatable small-channel outlier clusters, optionally asks AI to judge/expand close adjacent keywords, and promotes accepted keywords as `seed_keywords.source = 'niche_graph_ai'`.
+  - Rationale: AI should validate and lightly expand proven evidence, not generate broad search ideas that drift into trailers, sports, live streams, gameplay, shows, or other junk categories.
+
+- Use strict creator-niche content quality filtering with quarantine + hide semantics.
+  - Videos classified as `junk` are not inserted into visible `videos` feed data during ingestion; they are written to `content_rejections` for audit.
+  - Existing records are quarantined by backfill using `videos.content_class`, and read paths return only `content_class = 'niche'`.
+  - Junk-heavy channels are marked `channels.content_class = 'junk'` and matching seed channels are disabled rather than deleted.
+  - Rationale: NicheFinder should surface monetizable, replicable long-form creator niches, not general YouTube trend traffic such as Shorts, trailers, sports highlights, gameplay, live streams, broadcast clips, or official music videos.
+
 ## 2026-05-27
 
 - Use more of the daily YouTube quota by raising the application quota guard to 9,700 and sharding production auto-search across 9 Vercel cron invocations.

@@ -1,4 +1,5 @@
 import type { ChannelTrend } from "./trend";
+import type { ContentClass, ContentQualityReason } from "./content-quality";
 
 export type SearchSource =
   | "database"
@@ -37,6 +38,9 @@ export interface EnrichedVideo {
   estimatedRevenueUsd?: number;
   isMonetized?: boolean;
   isShort?: boolean;
+  contentClass?: ContentClass;
+  contentReasons?: ContentQualityReason[];
+  contentScore?: number;
 }
 
 export interface SearchAndEnrichResult {

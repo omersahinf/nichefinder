@@ -80,6 +80,15 @@ function viewsPerHour(row: VideoVelocityRow): number {
   return Number(row.views ?? 0) / ageHours;
 }
 
+function isMissingContentQualityColumn(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  );
+}
+
 export async function runVelocityTracker(): Promise<KeywordDiscoveryResult> {
   if (!isSupabaseConfigured() || !getSupabaseAdmin()) {
     return {
@@ -95,11 +104,19 @@ export async function runVelocityTracker(): Promise<KeywordDiscoveryResult> {
 
   const since = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
   const recentCutoff = Date.now() - 72 * 60 * 60 * 1000;
-  const { data, error } = await client
-    .from("videos")
-    .select("youtube_id,channel_id,title,views,outlier_score,published_at")
-    .gte("published_at", since)
-    .limit(5_000);
+  const readVideos = async (includeContentQuality: boolean) => {
+    let query = client
+      .from("videos")
+      .select("youtube_id,channel_id,title,views,outlier_score,published_at");
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query.gte("published_at", since).limit(5_000);
+  };
+  let { data, error } = await readVideos(true);
+  if (error && isMissingContentQualityColumn(error)) {
+    const legacy = await readVideos(false);
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) throw error;
 
   const clusters = new Map<string, Cluster>();

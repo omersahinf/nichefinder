@@ -6,11 +6,14 @@ import {
   getCachedSearch,
   getCachedVideoStats,
   getChannelVideoSamples,
+  disableSeedChannels,
+  logContentRejections,
   promoteToSeed,
   upsertChannelCategory,
   upsertChannelTags,
   upsertChannelTrends,
   upsertChannels,
+  updateChannelContentQuality,
   upsertVideos,
   writeSearchCache,
   youtubeBatchUnits,
@@ -23,6 +26,7 @@ import { classifyVideoCategory, estimateRevenue, type VideoCategory } from "./rp
 import { estimateMonetized } from "./monetization";
 import { parseIsoDurationToSeconds } from "./duration";
 import { hasShortsSignal } from "./video-format";
+import { classifyVideoContent, type ContentQualityReason } from "./content-quality";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -148,6 +152,42 @@ type SearchAndEnrichOptions = {
   forceRefresh?: boolean;
   filterLog?: Record<string, unknown>;
 };
+
+function channelQualityFromClassifiedVideos(
+  videos: EnrichedVideo[],
+): Array<{
+  channelId: string;
+  contentClass: "niche" | "junk";
+  reasons: ContentQualityReason[];
+  junkVideoRatio: number;
+}> {
+  const byChannel = new Map<string, { total: number; junk: number; reasons: Map<ContentQualityReason, number> }>();
+  for (const video of videos) {
+    const current = byChannel.get(video.channelId) ?? { total: 0, junk: 0, reasons: new Map() };
+    current.total += 1;
+    if (video.contentClass === "junk") {
+      current.junk += 1;
+      for (const reason of video.contentReasons ?? []) {
+        current.reasons.set(reason, (current.reasons.get(reason) ?? 0) + 1);
+      }
+    }
+    byChannel.set(video.channelId, current);
+  }
+
+  return [...byChannel.entries()].map(([channelId, stats]) => {
+    const junkVideoRatio = stats.total > 0 ? stats.junk / stats.total : 0;
+    const reasons = [...stats.reasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([reason]) => reason);
+    return {
+      channelId,
+      contentClass: stats.total >= 2 && junkVideoRatio >= 0.5 ? "junk" : "niche",
+      reasons,
+      junkVideoRatio,
+    };
+  });
+}
 
 async function fetchYoutubeJson<TItem>(
   path: string,
@@ -486,10 +526,32 @@ export async function searchAndEnrich(
       .filter((item): item is EnrichedVideo => item !== null)
       .sort((a, b) => b.outlierScore - a.outlierScore);
 
-    await upsertVideos(results);
+    const classifiedResults = results.map((video) => {
+      const classification = classifyVideoContent(video);
+      return {
+        ...video,
+        contentClass: classification.contentClass,
+        contentReasons: classification.reasons,
+        contentScore: classification.score,
+      };
+    });
+    const nicheResults = classifiedResults.filter((video) => video.contentClass === "niche");
+    const junkResults = classifiedResults.filter((video) => video.contentClass === "junk");
+
+    if (junkResults.length > 0) await logContentRejections(junkResults, "searchAndEnrich");
+    await upsertVideos(nicheResults);
+
+    const channelQuality = channelQualityFromClassifiedVideos(classifiedResults);
+    const junkChannelIds = channelQuality
+      .filter((entry) => entry.contentClass === "junk")
+      .map((entry) => entry.channelId);
+    await updateChannelContentQuality(channelQuality);
+    if (junkChannelIds.length > 0) {
+      await disableSeedChannels(junkChannelIds, "content_quality_junk_ratio");
+    }
 
     const categoryCountsByChannel = new Map<string, Map<string, number>>();
-    for (const video of results) {
+    for (const video of nicheResults) {
       if (!video.category) continue;
       const counts = categoryCountsByChannel.get(video.channelId) ?? new Map<string, number>();
       counts.set(video.category, (counts.get(video.category) ?? 0) + 1);
@@ -507,7 +569,7 @@ export async function searchAndEnrich(
     );
 
     const tagCountsByChannel = new Map<string, Map<string, number>>();
-    for (const video of results) {
+    for (const video of nicheResults) {
       const tags = video.tags ?? [];
       if (tags.length === 0) continue;
       const counts = tagCountsByChannel.get(video.channelId) ?? new Map<string, number>();
@@ -530,7 +592,7 @@ export async function searchAndEnrich(
     );
 
     // Compute trend per channel using cached+fresh videos for each channel.
-    const uniqueChannelIds = [...new Set(results.map((video) => video.channelId))];
+    const uniqueChannelIds = [...new Set(nicheResults.map((video) => video.channelId))];
     const samples = await getChannelVideoSamples(uniqueChannelIds, 90);
     const trendEntries: Array<{ channelId: string; trend: ChannelTrend }> = [];
     const trendMap = new Map<string, ChannelTrend>();
@@ -547,7 +609,7 @@ export async function searchAndEnrich(
       await upsertChannelTrends(trendEntries);
     }
 
-    const resultsWithTrend = results.map((video) => ({
+    const resultsWithTrend = nicheResults.map((video) => ({
       ...video,
       channelTrend: trendMap.get(video.channelId) ?? null,
     }));

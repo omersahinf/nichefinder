@@ -102,6 +102,15 @@ function normalizeTitle(title: string): string {
     .trim();
 }
 
+function isMissingContentQualityColumn(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  );
+}
+
 function viewsPerHour(row: VideoPatternRow): number {
   const publishedAt = row.published_at ? new Date(row.published_at).getTime() : Date.now();
   const ageHours = Math.max(1, (Date.now() - publishedAt) / 3_600_000);
@@ -265,11 +274,19 @@ export async function runPatternMiner(): Promise<KeywordDiscoveryResult> {
   if (!client) throw new Error("Supabase is not configured");
 
   const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await client
-    .from("videos")
-    .select("youtube_id,channel_id,title,views,outlier_score,published_at,fetched_at")
-    .gte("published_at", since)
-    .limit(5_000);
+  const readVideos = async (includeContentQuality: boolean) => {
+    let query = client
+      .from("videos")
+      .select("youtube_id,channel_id,title,views,outlier_score,published_at,fetched_at");
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query.gte("published_at", since).limit(5_000);
+  };
+  let { data, error } = await readVideos(true);
+  if (error && isMissingContentQualityColumn(error)) {
+    const legacy = await readVideos(false);
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) throw error;
 
   const candidates = new Map<string, PatternCandidate>();

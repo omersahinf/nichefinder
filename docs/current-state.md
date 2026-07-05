@@ -1,5 +1,42 @@
 # Current State
 
+## 2026-06-17
+
+Active focus:
+
+- Production daily automation check at `12:45 +03` / `09:45 UTC`:
+  - `api_usage` total for UTC day `2026-06-17`: about 9,276 units, under the 9,700 guard and 10,000 hard limit.
+  - Auto-search shards ran between about `08:48 +03` and `10:53 +03`; `niche_graph_ai` keywords were searched 24 times for 3,646 units.
+  - `grow-discover` ran successfully; `niche-graph-discovery` found 120 candidates, added 2 direct keywords, promoted 3 channels, and wrote lifecycle statuses.
+  - `grow-discover-ai` ran successfully; narrowed `ai:vertical-strategist` added 11 adjacent `niche_graph_ai` keywords from candidate evidence.
+  - `growth_job_errors` had 0 rows for the day, confirming the previous missing `channel_quality_scores` / `channel_deep_scans` schema issues are resolved.
+  - Issue found: sports fixture keywords `dodgers vs`, `dodgers vs angels`, and `dodgers vs padres` slipped into `niche_graph_ai` and were each auto-searched once.
+  - Fix applied: disabled those seed keywords remotely, tightened graph blocklist for `vs`, `dodgers`, `padres`, `psg`, `uefa`, and `champions league`, added regression tests, and deployed to production.
+  - Final smoke check: 0 enabled `niche_graph_ai` keywords match shorts/trailer/match/gameplay/live/movie/episode/sports/`vs` terms.
+
+## 2026-06-16
+
+Active focus:
+
+- Evidence-first niche graph discovery was implemented locally:
+  - Added `niche_candidates` lifecycle migration with status, score, evidence JSON, AI verdict JSON, and promotion timestamps.
+  - Added `runNicheGraphDiscovery` to `grow-discover`; it only reads `videos.content_class = 'niche'`, non-junk channels, 90-day long-form outlier evidence, and promotes accepted keywords as `seed_keywords.source = 'niche_graph_ai'`.
+  - Narrowed `ai-vertical-strategist` so it expands only from `niche_candidates` instead of generating broad keyword lists.
+  - Auto-search queue scoring now gives `niche_graph_ai` seeds the strongest source bonus.
+  - Added unit coverage for junk keyword blocking and small-channel repeated-outlier scoring.
+  - Verification: `npx tsc --noEmit` passed; full `npm test` passed; targeted ESLint for touched discovery/cron/cache files passed.
+- Remote Supabase schema was updated through `npx supabase db query --linked`:
+  - Applied idempotent migrations `111`, `112`, `114`, `116`, `118`, and `120`.
+  - Verified `channel_quality_scores`, `channel_deep_scans`, `niche_snapshots`, `content_rejections`, and `niche_candidates` exist remotely.
+  - Repaired remote migration history so local/remote versions `001` through `120` are all marked applied.
+  - Smoke counts after schema update: `niche_candidates = 0`, `seed_keywords.source = 'niche_graph_ai' = 0`; first `grow-discover` run should populate them if evidence qualifies.
+- Production deploy completed via `npx vercel deploy --prod --yes`:
+  - Active alias: `https://nichefinder-tau.vercel.app`.
+  - First production `grow-discover` run succeeded in about 29.5s; `niche-graph-discovery` found 120 candidates with status distribution `accepted=2`, `watch=75`, `rejected=43`, and promoted no direct high-score keywords.
+  - Production `grow-discover-ai` succeeded in about 41.9s and added 12 `niche_graph_ai` keywords from candidate evidence.
+  - Smoke check found `football strategy` among AI-adjacent keywords, so sports blocklists were tightened for `football`, `soccer`, `basketball`, and `baseball`; `football strategy` was disabled remotely.
+  - Second production deploy completed with the tightened filters; final smoke check showed `0` enabled `niche_graph_ai` keywords matching shorts/trailer/match/gameplay/live/movie/episode/sports terms.
+
 ## 2026-05-27
 
 Active focus:
@@ -11,6 +48,13 @@ Active focus:
   - Existing per-keyword quota guard remains active, so later shards should stop naturally once the day approaches the guard.
   - Verification: `vercel.json` parsed successfully, `npx tsc --noEmit` passed, and targeted ESLint for touched cron/cache files passed.
   - Full `npm run lint` still fails on pre-existing unrelated issues in `app/niche/[slug]/share/page.tsx` and unused warnings in other files.
+- 2026-05-27 production cron check at `14:56 +03` confirmed the sharded schedule worked:
+  - Supabase `api_usage` totals for UTC day `2026-05-27`: 96 rows, 9,490 units.
+  - Auto-search shards `/api/cron/auto-search` through `/api/cron/auto-search-9` all recorded usage: 92 keyword runs, 9,483 units.
+  - Auto-search activity spanned `08:56:43 +03` through `11:18:59 +03`.
+  - Total usage stayed below the 9,700 guard and within the 10,000 hard daily quota.
+  - Growth cron also recorded small usage: `cron` 4, `trend` 2, `graph_crawler` 1.
+  - Recurring growth sub-job errors remained: `channel-quality` missing `public.channel_quality_scores` and `uploads-deep-scan` missing `public.channel_deep_scans` in the Supabase schema cache.
 
 ## 2026-05-18
 

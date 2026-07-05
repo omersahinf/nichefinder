@@ -49,7 +49,6 @@ const DATE_OPTIONS = [
 const FORMAT_OPTIONS: { label: string; value: VideoFormat }[] = [
   { label: "All",       value: "all"      },
   { label: "Standard",  value: "standard" },
-  { label: "Shorts",    value: "shorts"   },
 ];
 
 function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {

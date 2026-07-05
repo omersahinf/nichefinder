@@ -5,6 +5,7 @@ import { runGraphCrawler } from "@/lib/graph-crawler";
 import { runKeywordExtraction } from "@/lib/keyword-extraction";
 import { runKeywordTrends } from "@/lib/keyword-trends";
 import { runKeywordVariation } from "@/lib/keyword-variation";
+import { runNicheGraphDiscovery } from "@/lib/niche-graph-discovery";
 import { runPatternMiner } from "@/lib/pattern-miner";
 import { runUploadsDeepScan } from "@/lib/uploads-deep-scan";
 import { runVelocityTracker } from "@/lib/velocity-tracker";
@@ -78,6 +79,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     safeJob("keyword-variation", runKeywordVariation),
     safeJob("keyword-trends", runKeywordTrends),
     safeJob("graph-crawler", runGraphCrawler),
+    safeJob("niche-graph-discovery", runNicheGraphDiscovery),
     safeJob("channel-quality", runChannelQualityScoring),
     safeJob("uploads-deep-scan", runUploadsDeepScan),
   ]);

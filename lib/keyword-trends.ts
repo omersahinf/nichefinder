@@ -34,8 +34,13 @@ const STOPWORDS = new Set([
   "vs",
   "news",
   "live",
+  "stream",
+  "trailer",
+  "shorts",
   "game",
   "games",
+  "gaming",
+  "gameplay",
 ]);
 
 const NOISY_TERMS = new Set([
@@ -51,6 +56,17 @@ const NOISY_TERMS = new Set([
   "weather",
   "lottery",
   "score",
+  "scores",
+  "highlight",
+  "highlights",
+  "trailer",
+  "teaser",
+  "shorts",
+  "gameplay",
+  "stream",
+  "live",
+  "movie",
+  "episode",
 ]);
 
 interface YoutubeTrendingItem {

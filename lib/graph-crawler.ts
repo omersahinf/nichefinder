@@ -18,6 +18,15 @@ interface GraphChannelRow {
 
 const CHANNEL_ID_REGEX = /(?:youtube\.com\/channel\/|channel_id=)(UC[A-Za-z0-9_-]{20,})/g;
 
+function isMissingContentQualityColumn(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  );
+}
+
 async function logDiscovery(
   job: string,
   candidatesFound: number,
@@ -54,15 +63,23 @@ export async function runGraphCrawler(): Promise<KeywordDiscoveryResult> {
   const client = getSupabaseAdmin();
   if (!client) throw new Error("Supabase is not configured");
 
-  const [{ data: videoRows, error: videosError }, { data: channelRows, error: channelsError }] =
-    await Promise.all([
-      client.from("videos").select("description").order("fetched_at", { ascending: false }).limit(2_000),
-      client
-        .from("channels")
-        .select("description")
-        .order("fetched_at", { ascending: false })
-        .limit(2_000),
-    ]);
+  const readVideos = async (includeContentQuality: boolean) => {
+    let query = client.from("videos").select("description");
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query.order("fetched_at", { ascending: false }).limit(2_000);
+  };
+  const readChannels = async (includeContentQuality: boolean) => {
+    let query = client.from("channels").select("description");
+    if (includeContentQuality) query = query.neq("content_class", "junk");
+    return query.order("fetched_at", { ascending: false }).limit(2_000);
+  };
+  let [{ data: videoRows, error: videosError }, { data: channelRows, error: channelsError }] =
+    await Promise.all([readVideos(true), readChannels(true)]);
+
+  if (isMissingContentQualityColumn(videosError) || isMissingContentQualityColumn(channelsError)) {
+    [{ data: videoRows, error: videosError }, { data: channelRows, error: channelsError }] =
+      await Promise.all([readVideos(false), readChannels(false)]);
+  }
 
   if (videosError) throw videosError;
   if (channelsError) throw channelsError;

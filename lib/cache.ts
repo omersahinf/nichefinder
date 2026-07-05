@@ -7,6 +7,11 @@ import type { EnrichedVideo, QuotaUsage, SearchSource, StoredSearchSource } from
 import type { ChannelTrend, VideoSample } from "./trend";
 import { estimateRevenue, type VideoCategory } from "./rpm";
 import { hasShortsSignal, matchesVideoFormat, type VideoFormatFilter } from "./video-format";
+import {
+  classifyVideoContent,
+  type ContentClass,
+  type ContentQualityReason,
+} from "./content-quality";
 
 const CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
 const VIDEO_TTL_MS = 12 * 60 * 60 * 1000;
@@ -24,6 +29,12 @@ const QUERY_EXPANSIONS: Record<string, string[]> = {
     "automation",
   ],
 };
+
+const SEARCH_VIDEO_SELECT_WITH_DURATION =
+  "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,duration_seconds,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at,content_class,content_reasons,content_score,channels!inner(youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at,content_class,content_reasons,junk_video_ratio)";
+
+const SEARCH_VIDEO_SELECT_WITHOUT_DURATION =
+  "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at,content_class,content_reasons,content_score,channels!inner(youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at,content_class,content_reasons,junk_video_ratio)";
 
 export interface SearchCacheOptions {
   query: string;
@@ -47,7 +58,7 @@ export interface NicheSnapshot {
   results: EnrichedVideo[];
 }
 
-export type SeedChannelSource = "manual" | "mention" | "featured" | "user_search";
+export type SeedChannelSource = "manual" | "mention" | "featured" | "user_search" | "niche_graph_ai";
 
 export interface SeedChannel {
   channelId: string;
@@ -83,6 +94,9 @@ interface ChannelRow {
   trend_sample_size?: number | string | null;
   avg_views_last_30?: number | string | null;
   is_monetized?: boolean | null;
+  content_class?: ContentClass | string | null;
+  content_reasons?: ContentQualityReason[] | string[] | null;
+  junk_video_ratio?: number | string | null;
 }
 
 interface VideoRow {
@@ -102,6 +116,9 @@ interface VideoRow {
   outlier_score: number | string | null;
   outlier_reason: string | null;
   fetched_at: string | null;
+  content_class?: ContentClass | string | null;
+  content_reasons?: ContentQualityReason[] | string[] | null;
+  content_score?: number | string | null;
 }
 
 interface BrowseVideoRow extends VideoRow {
@@ -151,6 +168,8 @@ interface SeedChannelRow {
   priority: number | string | null;
   added_at: string | null;
   last_crawled_at: string | null;
+  disabled_at?: string | null;
+  disabled_reason?: string | null;
 }
 
 const isFresh = (fetchedAt: string | null | undefined, ttlMs: number): boolean => {
@@ -166,6 +185,16 @@ const isMissingDurationSecondsColumn = (error: unknown): boolean =>
   error !== null &&
   "message" in error &&
   String(error.message).includes("duration_seconds");
+
+const isMissingContentQualityColumn = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "message" in error &&
+  (String(error.message).includes("content_class") ||
+    String(error.message).includes("content_reasons") ||
+    String(error.message).includes("content_score") ||
+    String(error.message).includes("junk_video_ratio") ||
+    String(error.message).includes("disabled_at"));
 
 export const youtubeBatchUnits = (count: number): number =>
   count > 0 ? Math.ceil(count / 50) : 0;
@@ -438,11 +467,17 @@ export async function getChannelVideoSamples(
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    const { data, error } = await client
-      .from("videos")
-      .select("channel_id,views,published_at")
-      .in("channel_id", unique)
-      .gte("published_at", since);
+    const readSamples = async (includeContentQuality: boolean) => {
+      let query = client.from("videos").select("channel_id,views,published_at").in("channel_id", unique);
+      if (includeContentQuality) query = query.eq("content_class", "niche");
+      return query.gte("published_at", since);
+    };
+    let { data, error } = await readSamples(true);
+    if (error && isMissingContentQualityColumn(error)) {
+      const legacy = await readSamples(false);
+      data = legacy.data;
+      error = legacy.error;
+    }
 
     if (error) throw error;
 
@@ -606,7 +641,28 @@ export async function promoteToSeed(
   const uniqueIds = [...new Set(channelIds)].filter(Boolean);
   if (!client || uniqueIds.length === 0) return;
 
-  const rows = uniqueIds.map((channelId) => ({
+  let seedableIds = uniqueIds;
+  try {
+    const { data, error } = await client
+      .from("channels")
+      .select("youtube_id,content_class")
+      .in("youtube_id", uniqueIds);
+    if (error) throw error;
+    const junkIds = new Set(
+      ((data ?? []) as ChannelRow[])
+        .filter((row) => row.content_class === "junk")
+        .map((row) => row.youtube_id),
+    );
+    seedableIds = uniqueIds.filter((id) => !junkIds.has(id));
+  } catch (error) {
+    if (!isMissingContentQualityColumn(error)) {
+      console.warn("[cache] seed content-quality filter skipped", error);
+    }
+  }
+
+  if (seedableIds.length === 0) return;
+
+  const rows = seedableIds.map((channelId) => ({
     channel_id: channelId,
     added_via: addedVia,
     priority,
@@ -631,14 +687,39 @@ export async function upsertSeedChannel(
   const client = getSupabaseAdmin();
   if (!client) throw new Error("Supabase is not configured");
 
-  const { error } = await client.from("seed_channels").upsert(
-    {
-      channel_id: channelId,
-      added_via: addedVia,
-      priority,
-    },
-    { onConflict: "channel_id" },
-  );
+  try {
+    const { data: channel, error: channelError } = await client
+      .from("channels")
+      .select("content_class")
+      .eq("youtube_id", channelId)
+      .maybeSingle();
+    if (channelError) throw channelError;
+    if ((channel as Pick<ChannelRow, "content_class"> | null)?.content_class === "junk") return;
+  } catch (error) {
+    if (!isMissingContentQualityColumn(error)) {
+      console.warn("[cache] seed content-quality check skipped", error);
+    }
+  }
+
+  const row = {
+    channel_id: channelId,
+    added_via: addedVia,
+    priority,
+    disabled_at: null,
+    disabled_reason: null,
+  };
+  const { error } = await client.from("seed_channels").upsert(row, { onConflict: "channel_id" });
+
+  if (error && isMissingContentQualityColumn(error)) {
+    const { disabled_at, disabled_reason, ...legacyRow } = row;
+    void disabled_at;
+    void disabled_reason;
+    const { error: legacyError } = await client
+      .from("seed_channels")
+      .upsert(legacyRow, { onConflict: "channel_id" });
+    if (legacyError) throw legacyError;
+    return;
+  }
 
   if (error) throw error;
 }
@@ -647,29 +728,57 @@ export async function listSeedChannels(limit = 100): Promise<SeedChannel[]> {
   const client = getSupabaseAdmin();
   if (!client) return [];
 
-  const { data: seedData, error: seedError } = await client
-    .from("seed_channels")
-    .select("channel_id,added_via,priority,added_at,last_crawled_at")
-    .order("priority", { ascending: false })
-    .limit(limit);
+  const readSeeds = async (includeDisabledColumns: boolean) => {
+    let query = client
+      .from("seed_channels")
+      .select(
+        includeDisabledColumns
+          ? "channel_id,added_via,priority,added_at,last_crawled_at,disabled_at,disabled_reason"
+          : "channel_id,added_via,priority,added_at,last_crawled_at",
+      )
+      .order("priority", { ascending: false })
+      .limit(limit);
+    if (includeDisabledColumns) query = query.is("disabled_at", null);
+    return query;
+  };
+
+  let { data: seedData, error: seedError } = await readSeeds(true);
+  if (seedError && isMissingContentQualityColumn(seedError)) {
+    const legacy = await readSeeds(false);
+    seedData = legacy.data;
+    seedError = legacy.error;
+  }
 
   if (seedError) throw seedError;
 
-  const seedRows = (seedData ?? []) as SeedChannelRow[];
+  const seedRows = (seedData ?? []) as unknown as SeedChannelRow[];
   const channelIds = seedRows.map((row) => row.channel_id);
   if (channelIds.length === 0) return [];
 
-  const { data: channelData, error: channelError } = await client
-    .from("channels")
-    .select(
-      "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,is_monetized,thumbnail_url,fetched_at",
-    )
-    .in("youtube_id", channelIds);
+  const readChannels = async (includeContentQuality: boolean) => {
+    let query = client
+      .from("channels")
+      .select(
+        includeContentQuality
+          ? "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,is_monetized,thumbnail_url,fetched_at,content_class,content_reasons,junk_video_ratio"
+          : "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,is_monetized,thumbnail_url,fetched_at",
+      )
+      .in("youtube_id", channelIds);
+    if (includeContentQuality) query = query.neq("content_class", "junk");
+    return query;
+  };
+
+  let { data: channelData, error: channelError } = await readChannels(true);
+  if (channelError && isMissingContentQualityColumn(channelError)) {
+    const legacy = await readChannels(false);
+    channelData = legacy.data;
+    channelError = legacy.error;
+  }
 
   if (channelError) throw channelError;
 
   const channels = new Map(
-    ((channelData ?? []) as ChannelRow[]).map((row) => [row.youtube_id, row]),
+    ((channelData ?? []) as unknown as ChannelRow[]).map((row) => [row.youtube_id, row]),
   );
 
   return seedRows
@@ -717,12 +826,131 @@ export async function markSeedChannelsCrawled(channelIds: string[]): Promise<voi
   if (error) throw error;
 }
 
+export async function disableSeedChannels(channelIds: string[], reason: string): Promise<void> {
+  const client = getSupabaseAdmin();
+  const uniqueIds = [...new Set(channelIds)].filter(Boolean);
+  if (!client || uniqueIds.length === 0) return;
+
+  try {
+    const { error } = await client
+      .from("seed_channels")
+      .update({
+        disabled_at: new Date().toISOString(),
+        disabled_reason: reason,
+      })
+      .in("channel_id", uniqueIds);
+    if (error) throw error;
+  } catch (error) {
+    if (!isMissingContentQualityColumn(error)) {
+      console.warn("[cache] seed disable skipped", error);
+    }
+  }
+}
+
+export async function updateChannelContentQuality(
+  entries: Array<{
+    channelId: string;
+    contentClass: ContentClass;
+    reasons: ContentQualityReason[];
+    junkVideoRatio: number;
+  }>,
+): Promise<void> {
+  const client = getSupabaseAdmin();
+  if (!client || entries.length === 0) return;
+
+  try {
+    const updates = entries.map((entry) =>
+      client
+        .from("channels")
+        .update({
+          content_class: entry.contentClass,
+          content_reasons: entry.reasons,
+          junk_video_ratio: entry.junkVideoRatio,
+        })
+        .eq("youtube_id", entry.channelId),
+    );
+    const results = await Promise.all(updates);
+    for (const { error } of results) {
+      if (error) throw error;
+    }
+  } catch (error) {
+    if (!isMissingContentQualityColumn(error)) {
+      console.warn("[cache] channel content-quality update skipped", error);
+    }
+  }
+}
+
+export async function logContentRejections(
+  videos: EnrichedVideo[],
+  source: string,
+): Promise<void> {
+  const client = getSupabaseAdmin();
+  if (!client || videos.length === 0) return;
+
+  const rows = videos.map((video) => {
+    const classification =
+      video.contentClass && video.contentReasons && typeof video.contentScore === "number"
+        ? {
+            contentClass: video.contentClass,
+            reasons: video.contentReasons,
+            score: video.contentScore,
+          }
+        : classifyVideoContent(video);
+    return {
+      entity_type: "video",
+      video_id: video.id,
+      channel_id: video.channelId,
+      channel_title: video.channelTitle,
+      title: video.title,
+      description: video.description,
+      duration_seconds: video.durationSeconds ?? parseIsoDurationToSeconds(video.duration),
+      tags: video.tags ?? [],
+      content_class: classification.contentClass,
+      content_reasons: classification.reasons,
+      content_score: classification.score,
+      source,
+      metadata: {
+        views: video.views,
+        publishedAt: video.publishedAt,
+      },
+    };
+  });
+
+  try {
+    const { error } = await client.from("content_rejections").insert(rows);
+    if (error) throw error;
+  } catch (error) {
+    if (!isMissingContentQualityColumn(error)) {
+      console.warn("[cache] content rejection log skipped", error);
+    }
+  }
+}
+
 export async function upsertVideos(videos: EnrichedVideo[]): Promise<void> {
   const client = getSupabaseAdmin();
   if (!client || videos.length === 0) return;
 
   const fetchedAt = new Date().toISOString();
-  const rows = videos.map((video) => ({
+  const classified = videos.map((video) => {
+    const classification = classifyVideoContent(video);
+    return {
+      video: {
+        ...video,
+        contentClass: classification.contentClass,
+        contentReasons: classification.reasons,
+        contentScore: classification.score,
+      },
+      classification,
+    };
+  });
+  const junkVideos = classified
+    .filter((item) => item.classification.contentClass !== "niche")
+    .map((item) => item.video);
+  if (junkVideos.length > 0) await logContentRejections(junkVideos, "upsertVideos");
+
+  const rows = classified
+    .filter((item) => item.classification.contentClass === "niche")
+    .map(({ video, classification }) => ({
     youtube_id: video.id,
     channel_id: video.channelId,
     channel_title: video.channelTitle,
@@ -739,7 +967,12 @@ export async function upsertVideos(videos: EnrichedVideo[]): Promise<void> {
     outlier_score: video.outlierScore,
     outlier_reason: video.outlierReason,
     fetched_at: fetchedAt,
+    content_class: classification.contentClass,
+    content_reasons: classification.reasons,
+    content_score: classification.score,
   }));
+
+  if (rows.length === 0) return;
 
   try {
     const { error } = await client.from("videos").upsert(rows, {
@@ -747,9 +980,12 @@ export async function upsertVideos(videos: EnrichedVideo[]): Promise<void> {
     });
     if (error) throw error;
   } catch (error) {
-    if (isMissingDurationSecondsColumn(error)) {
-      const legacyRows = rows.map(({ duration_seconds, ...row }) => {
+    if (isMissingDurationSecondsColumn(error) || isMissingContentQualityColumn(error)) {
+      const legacyRows = rows.map(({ duration_seconds, content_class, content_reasons, content_score, ...row }) => {
         void duration_seconds;
+        void content_class;
+        void content_reasons;
+        void content_score;
         return row;
       });
       try {
@@ -816,6 +1052,9 @@ function hydrateVideoRow(row: VideoRow, channel: ChannelRow): EnrichedVideo {
     category: revenue?.category ?? channel.category ?? undefined,
     rpmUsd: revenue?.rpmUsd,
     estimatedRevenueUsd: revenue?.estimatedRevenueUsd,
+    contentClass: row.content_class === "niche" ? "niche" : row.content_class === "junk" ? "junk" : undefined,
+    contentReasons: (row.content_reasons ?? []) as ContentQualityReason[],
+    contentScore: Number(row.content_score ?? 0) || undefined,
   };
 }
 
@@ -824,22 +1063,25 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
   const orderedIds = ids.filter(Boolean);
   if (!client || orderedIds.length === 0) return [];
 
-  const initialVideos = await client
-    .from("videos")
-    .select(
-      "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,duration_seconds,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at",
-    )
-    .in("youtube_id", orderedIds);
+  const readVideos = async (includeDurationSeconds: boolean, includeContentQuality: boolean) => {
+    const durationColumn = includeDurationSeconds ? ",duration_seconds" : "";
+    const contentColumns = includeContentQuality ? ",content_class,content_reasons,content_score" : "";
+    let query = client
+      .from("videos")
+      .select(
+        `youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration${durationColumn},published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at${contentColumns}`,
+      )
+      .in("youtube_id", orderedIds);
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query;
+  };
+
+  const initialVideos = await readVideos(true, true);
   let videoData: unknown = initialVideos.data;
   let videoError = initialVideos.error;
 
-  if (videoError && isMissingDurationSecondsColumn(videoError)) {
-    const legacy = await client
-      .from("videos")
-      .select(
-        "youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration,published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at",
-      )
-      .in("youtube_id", orderedIds);
+  if (videoError && (isMissingDurationSecondsColumn(videoError) || isMissingContentQualityColumn(videoError))) {
+    const legacy = await readVideos(false, false);
     videoData = legacy.data;
     videoError = legacy.error;
   }
@@ -850,17 +1092,30 @@ async function hydrateCachedVideos(ids: string[]): Promise<EnrichedVideo[]> {
   const channelIds = [...new Set(videoRows.map((row) => row.channel_id))];
   if (channelIds.length === 0) return [];
 
-  const { data: channelData, error: channelError } = await client
-    .from("channels")
-    .select(
-      "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at",
-    )
-    .in("youtube_id", channelIds);
+  const readChannels = async (includeContentQuality: boolean) => {
+    let query = client
+      .from("channels")
+      .select(
+        includeContentQuality
+          ? "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at,content_class,content_reasons,junk_video_ratio"
+          : "youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at",
+      )
+      .in("youtube_id", channelIds);
+    if (includeContentQuality) query = query.neq("content_class", "junk");
+    return query;
+  };
+
+  let { data: channelData, error: channelError } = await readChannels(true);
+  if (channelError && isMissingContentQualityColumn(channelError)) {
+    const legacy = await readChannels(false);
+    channelData = legacy.data;
+    channelError = legacy.error;
+  }
 
   if (channelError) throw channelError;
 
   const channelMap = new Map(
-    ((channelData ?? []) as ChannelRow[]).map((row) => [row.youtube_id, row]),
+    ((channelData ?? []) as unknown as ChannelRow[]).map((row) => [row.youtube_id, row]),
   );
 
   const resultMap = new Map<string, EnrichedVideo>();
@@ -901,13 +1156,14 @@ export async function searchCachedVideos(
   const searchTerms = dbSearchTerms(filters.q).allTerms;
 
   const runQuery = (includeDurationSeconds: boolean) => {
-    const durationColumn = includeDurationSeconds ? ",duration_seconds" : "";
+    const select = includeDurationSeconds
+      ? SEARCH_VIDEO_SELECT_WITH_DURATION
+      : SEARCH_VIDEO_SELECT_WITHOUT_DURATION;
     let query = client
       .from("videos")
-      .select(
-        `youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration${durationColumn},published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at,channels!inner(youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at)`,
-        { count: "exact" },
-      );
+      .select(select as string, { count: "exact" })
+      .eq("content_class", "niche")
+      .neq("channels.content_class", "junk");
 
     const orFilter = searchOrFilter(filters.q);
     if (orFilter) query = query.or(orFilter);
@@ -950,19 +1206,69 @@ export async function searchCachedVideos(
         break;
     }
 
-    if (includeDurationSeconds) {
-      return query.range(from, to);
-    }
-
-    return query.range(0, Math.min(Math.max(to, 500), 2_000));
+    return query.range(from, Math.max(to, from + Math.max(pageSize * 10, 1_000) - 1));
   };
 
-  let { data, error, count } = await runQuery(true);
-  if (error && isMissingDurationSecondsColumn(error)) {
-    const legacy = await runQuery(false);
-    data = legacy.data;
-    error = legacy.error;
-    count = legacy.count;
+  const initial = await runQuery(true);
+  let data: unknown = initial.data;
+  let error: unknown = initial.error;
+  let count = initial.count;
+  if (error && (isMissingDurationSecondsColumn(error) || isMissingContentQualityColumn(error))) {
+    const legacyRunQuery = (includeDurationSeconds: boolean) => {
+      const durationColumn = includeDurationSeconds ? ",duration_seconds" : "";
+      let query = client
+        .from("videos")
+        .select(
+          `youtube_id,channel_id,channel_title,title,description,views,likes,comments,duration${durationColumn},published_at,thumbnail_url,tags,outlier_score,outlier_reason,fetched_at,channels!inner(youtube_id,title,description,subs,total_views,video_count,country,created_at,category,tags,is_monetized,thumbnail_url,fetched_at)`,
+          { count: "exact" },
+        );
+
+      const orFilter = searchOrFilter(filters.q);
+      if (orFilter) query = query.or(orFilter);
+      if (filters.minSubs !== undefined) query = query.gte("channels.subs", filters.minSubs);
+      if (filters.maxSubs !== undefined) query = query.lte("channels.subs", filters.maxSubs);
+      if (filters.minViews !== undefined) query = query.gte("views", filters.minViews);
+      if (filters.minOutlier !== undefined) query = query.gte("outlier_score", filters.minOutlier);
+      if (filters.publishedAfter) query = query.gte("published_at", filters.publishedAfter);
+      if (filters.publishedBefore) query = query.lte("published_at", filters.publishedBefore);
+      if (includeDurationSeconds && filters.minDurationSeconds !== undefined) {
+        query = query.gte("duration_seconds", filters.minDurationSeconds);
+      }
+      if (
+        includeDurationSeconds &&
+        filters.maxDurationSeconds !== undefined &&
+        Number.isFinite(filters.maxDurationSeconds)
+      ) {
+        query = query.lte("duration_seconds", filters.maxDurationSeconds);
+      }
+      switch (filters.sort) {
+        case "views":
+          query = query.order("views", { ascending: false });
+          break;
+        case "date":
+          query = query.order("published_at", { ascending: false });
+          break;
+        case "subs":
+          query = query.order("channels(subs)", { ascending: true });
+          break;
+        case "outlier":
+        default:
+          query = query.order("outlier_score", { ascending: false });
+          break;
+      }
+      return includeDurationSeconds ? query.range(from, to) : query.range(0, Math.min(Math.max(to, 500), 2_000));
+    };
+    const legacy = await legacyRunQuery(!isMissingDurationSecondsColumn(error));
+    if (legacy.error && isMissingDurationSecondsColumn(legacy.error)) {
+      const noDuration = await legacyRunQuery(false);
+      data = noDuration.data;
+      error = noDuration.error;
+      count = noDuration.count;
+    } else {
+      data = legacy.data;
+      error = legacy.error;
+      count = legacy.count;
+    }
   }
   if (error) throw error;
 
@@ -973,6 +1279,8 @@ export async function searchCachedVideos(
 
   const filtered = hydrated
     .filter((video) => {
+      if (video.contentClass === "junk") return false;
+      if (classifyVideoContent(video).contentClass !== "niche") return false;
       if (
         filters.minDurationSeconds !== undefined &&
         (video.durationSeconds ?? 0) < filters.minDurationSeconds
@@ -991,7 +1299,7 @@ export async function searchCachedVideos(
     });
   const sorted = sortCachedVideos(filtered, filters, searchTerms);
   const results = sorted.slice(0, pageSize);
-  const totalCount = count ?? results.length;
+  const totalCount = filtered.length < hydrated.length ? filtered.length : count ?? results.length;
 
   return {
     results,

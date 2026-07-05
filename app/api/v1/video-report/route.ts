@@ -5,8 +5,34 @@ import { computeSaturation } from "@/lib/saturation";
 import { computeNicheDecision } from "@/lib/niche-decision";
 import { findSimilarChannels } from "@/lib/similar";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import type { EnrichedVideo } from "@/lib/search-types";
 
 export const dynamic = "force-dynamic";
+
+interface VideoReportRow {
+  youtube_id: string;
+  title: string | null;
+  views: number | string | null;
+  channel_id: string;
+  published_at: string | null;
+  outlier_score: number | string | null;
+  tags: string[] | null;
+  thumbnail_url: string | null;
+  duration_seconds: number | string | null;
+  content_class?: string | null;
+}
+
+interface ChannelReportRow {
+  youtube_id: string;
+  title: string | null;
+  subs: number | string | null;
+  avg_views_last_30: number | string | null;
+  category: string | null;
+  tags: string[] | null;
+  thumbnail_url: string | null;
+  created_at: string | null;
+  content_class?: string | null;
+}
 
 function extractVideoId(input: string): string | null {
   const parsed = parseChannelIdFromUrl(input);
@@ -18,28 +44,62 @@ async function getVideoFromDb(videoId: string) {
   const client = getSupabaseAdmin();
   if (!client) return null;
 
-  const { data } = await client
-    .from("videos")
-    .select(
-      "youtube_id,title,views,channel_id,published_at,outlier_score,tags,thumbnail_url,duration_seconds",
-    )
-    .eq("youtube_id", videoId)
-    .maybeSingle();
+  const readVideo = async (includeContentQuality: boolean) => {
+    const select = includeContentQuality
+      ? "youtube_id,title,views,channel_id,published_at,outlier_score,tags,thumbnail_url,duration_seconds,content_class"
+      : "youtube_id,title,views,channel_id,published_at,outlier_score,tags,thumbnail_url,duration_seconds";
+    let query = client
+      .from("videos")
+      .select(select as string)
+      .eq("youtube_id", videoId);
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query.maybeSingle();
+  };
+  let { data, error } = await readVideo(true);
+  if (
+    error &&
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  ) {
+    const legacy = await readVideo(false);
+    data = legacy.data;
+    error = legacy.error;
+  }
 
-  return data ?? null;
+  return (data ?? null) as unknown as VideoReportRow | null;
 }
 
 async function getChannelFromDb(channelId: string) {
   const client = getSupabaseAdmin();
   if (!client) return null;
 
-  const { data } = await client
-    .from("channels")
-    .select("youtube_id,title,subs,avg_views_last_30,category,tags,thumbnail_url,created_at")
-    .eq("youtube_id", channelId)
-    .maybeSingle();
+  const readChannel = async (includeContentQuality: boolean) => {
+    const select = includeContentQuality
+      ? "youtube_id,title,subs,avg_views_last_30,category,tags,thumbnail_url,created_at,content_class"
+      : "youtube_id,title,subs,avg_views_last_30,category,tags,thumbnail_url,created_at";
+    let query = client
+      .from("channels")
+      .select(select as string)
+      .eq("youtube_id", channelId);
+    if (includeContentQuality) query = query.neq("content_class", "junk");
+    return query.maybeSingle();
+  };
+  let { data, error } = await readChannel(true);
+  if (
+    error &&
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  ) {
+    const legacy = await readChannel(false);
+    data = legacy.data;
+    error = legacy.error;
+  }
 
-  return data ?? null;
+  return (data ?? null) as unknown as ChannelReportRow | null;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -57,10 +117,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const [video, dbPage] = await Promise.all([
-      getVideoFromDb(videoId),
-      searchCachedVideos({ q: undefined, page: 1, pageSize: 200, sort: "outlier" }),
-    ]);
+    const video = await getVideoFromDb(videoId);
 
     if (!video) {
       return NextResponse.json(
@@ -79,7 +136,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const tags = (video.tags as string[] | null) ?? [];
     const nicheKeyword = tags[0] ?? (channel as { category?: string | null } | null)?.category ?? "";
 
-    let nicheVideos: Awaited<typeof dbPage>["results"] = [];
+    let nicheVideos: EnrichedVideo[] = [];
     if (nicheKeyword) {
       const nicheDb = await searchCachedVideos({
         q: nicheKeyword,

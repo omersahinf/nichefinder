@@ -14,6 +14,7 @@ interface SimilarChannelRow {
   subs: number | string | null;
   thumbnail_url: string | null;
   tags: string[] | null;
+  content_class?: string | null;
 }
 
 const normalizeTags = (tags: string[]): string[] =>
@@ -41,27 +42,54 @@ export async function findSimilarChannels(
   if (!client || !channelId) return [];
 
   try {
-    const { data: targetData, error: targetError } = await client
-      .from("channels")
-      .select("youtube_id,tags")
-      .eq("youtube_id", channelId)
-      .maybeSingle();
+    const missingContentQualityColumn = (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      String(error.message).includes("content_class");
+
+    const readTarget = async (includeContentQuality: boolean) => {
+      let query = client
+        .from("channels")
+        .select(includeContentQuality ? "youtube_id,tags,content_class" : "youtube_id,tags")
+        .eq("youtube_id", channelId);
+      if (includeContentQuality) query = query.neq("content_class", "junk");
+      return query.maybeSingle();
+    };
+    let { data: targetData, error: targetError } = await readTarget(true);
+    if (targetError && missingContentQualityColumn(targetError)) {
+      const legacy = await readTarget(false);
+      targetData = legacy.data;
+      targetError = legacy.error;
+    }
 
     if (targetError) throw targetError;
 
     const targetTags = normalizeTags(((targetData as { tags?: string[] } | null)?.tags) ?? []);
     if (targetTags.length === 0) return [];
 
-    const { data, error } = await client
-      .from("channels")
-      .select("youtube_id,title,subs,thumbnail_url,tags")
-      .neq("youtube_id", channelId)
-      .overlaps("tags", targetTags)
-      .limit(200);
+    const readCandidates = async (includeContentQuality: boolean) => {
+      let query = client
+        .from("channels")
+        .select(
+          includeContentQuality
+            ? "youtube_id,title,subs,thumbnail_url,tags,content_class"
+            : "youtube_id,title,subs,thumbnail_url,tags",
+        )
+        .neq("youtube_id", channelId);
+      if (includeContentQuality) query = query.neq("content_class", "junk");
+      return query.overlaps("tags", targetTags).limit(200);
+    };
+    let { data, error } = await readCandidates(true);
+    if (error && missingContentQualityColumn(error)) {
+      const legacy = await readCandidates(false);
+      data = legacy.data;
+      error = legacy.error;
+    }
 
     if (error) throw error;
 
-    return ((data ?? []) as SimilarChannelRow[])
+    return ((data ?? []) as unknown as SimilarChannelRow[])
       .map((row) => ({
         channelId: row.youtube_id,
         similarity: jaccard(targetTags, row.tags ?? []),

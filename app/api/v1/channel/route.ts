@@ -29,6 +29,7 @@ interface ChannelRow {
   trend_sample_size: number | string | null;
   avg_views_last_30: number | string | null;
   is_monetized: boolean | null;
+  content_class?: string | null;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -58,19 +59,35 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    let query = client
-      .from("channels")
-      .select("*")
-      .eq("youtube_id", channelId);
+    const isMissingContentQualityColumn = (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      String(error.message).includes("content_class");
 
-    if (channelId.startsWith("@")) {
-      query = client
+    const readChannel = async (includeContentQuality: boolean) => {
+      let query = client
         .from("channels")
         .select("*")
-        .ilike("title", channelId.slice(1));
-    }
+        .eq("youtube_id", channelId);
 
-    const { data, error } = await query.maybeSingle();
+      if (channelId.startsWith("@")) {
+        query = client
+          .from("channels")
+          .select("*")
+          .ilike("title", channelId.slice(1));
+      }
+
+      if (includeContentQuality) query = query.neq("content_class", "junk");
+      return query.maybeSingle();
+    };
+
+    let { data, error } = await readChannel(true);
+    if (error && isMissingContentQualityColumn(error)) {
+      const legacy = await readChannel(false);
+      data = legacy.data;
+      error = legacy.error;
+    }
 
     if (error) throw error;
 
@@ -78,7 +95,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Channel not found in cache" }, { status: 404 });
     }
 
-    const channel = data as ChannelRow;
+    const channel = data as unknown as ChannelRow;
 
     return NextResponse.json({
       id: channel.youtube_id,

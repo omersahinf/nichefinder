@@ -48,7 +48,7 @@ export default function ApiDocsPage() {
             <div><code>publishedAfter</code>, <code>publishedBefore</code> ISO or YYYY-MM-DD</div>
             <div><code>minDurationSeconds</code>, <code>maxDurationSeconds</code></div>
             <div><code>minViews</code>, <code>minOutlier</code></div>
-            <div><code>format</code> one of <code>all</code>, <code>standard</code>, <code>shorts</code></div>
+            <div><code>format</code> one of <code>all</code>, <code>standard</code>; short clips are quarantined from public results</div>
             <div><code>sort</code> one of <code>outlier</code>, <code>views</code>, <code>date</code>, <code>subs</code></div>
             <div><code>forceRefresh=1</code> or <code>force=1</code> refreshes YouTube for keyword searches, then returns database results</div>
           </div>

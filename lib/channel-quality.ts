@@ -11,6 +11,7 @@ interface ChannelRow {
   is_monetized: boolean | null;
   trend_growth_30d?: number | string | null;
   avg_views_last_30?: number | string | null;
+  content_class?: string | null;
 }
 
 interface VideoRow {
@@ -19,6 +20,7 @@ interface VideoRow {
   views: number | string | null;
   outlier_score: number | string | null;
   published_at: string | null;
+  content_class?: string | null;
 }
 
 interface QualityScore {
@@ -35,6 +37,15 @@ interface QualityScore {
 }
 
 const HIGH_VALUE_CATEGORIES = new Set(["finance", "business", "tech", "education", "health"]);
+
+function isMissingContentQualityColumn(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  );
+}
 
 async function logDiscovery(
   job: string,
@@ -124,16 +135,26 @@ export async function runChannelQualityScoring(): Promise<KeywordDiscoveryResult
   const client = getSupabaseAdmin();
   if (!client) throw new Error("Supabase is not configured");
 
-  const { data: channelData, error: channelError } = await client
-    .from("channels")
-    .select(
-      "youtube_id,title,subs,total_views,video_count,category,is_monetized,trend_growth_30d,avg_views_last_30",
-    )
-    .order("fetched_at", { ascending: false })
-    .limit(2_000);
+  const readChannels = async (includeContentQuality: boolean) => {
+    let query = client
+      .from("channels")
+      .select(
+        includeContentQuality
+          ? "youtube_id,title,subs,total_views,video_count,category,is_monetized,trend_growth_30d,avg_views_last_30,content_class"
+          : "youtube_id,title,subs,total_views,video_count,category,is_monetized,trend_growth_30d,avg_views_last_30",
+      );
+    if (includeContentQuality) query = query.neq("content_class", "junk");
+    return query.order("fetched_at", { ascending: false }).limit(2_000);
+  };
+  let { data: channelData, error: channelError } = await readChannels(true);
+  if (channelError && isMissingContentQualityColumn(channelError)) {
+    const legacy = await readChannels(false);
+    channelData = legacy.data;
+    channelError = legacy.error;
+  }
   if (channelError) throw channelError;
 
-  const channels = (channelData ?? []) as ChannelRow[];
+  const channels = (channelData ?? []) as unknown as ChannelRow[];
   const channelIds = channels.map((channel) => channel.youtube_id);
   if (channelIds.length === 0) {
     await logDiscovery("channel-quality", 0, 0, { skipped: "no_channels" });
@@ -151,14 +172,26 @@ export async function runChannelQualityScoring(): Promise<KeywordDiscoveryResult
   const videoData: VideoRow[] = [];
   for (let i = 0; i < channelIds.length; i += CHUNK) {
     const chunk = channelIds.slice(i, i + CHUNK);
-    const { data, error: videoError } = await client
-      .from("videos")
-      .select("channel_id,title,views,outlier_score,published_at")
-      .in("channel_id", chunk)
-      .gte("published_at", since)
-      .limit(10_000);
+    const readVideos = async (includeContentQuality: boolean) => {
+      let query = client
+        .from("videos")
+        .select(
+          includeContentQuality
+            ? "channel_id,title,views,outlier_score,published_at,content_class"
+            : "channel_id,title,views,outlier_score,published_at",
+        )
+        .in("channel_id", chunk);
+      if (includeContentQuality) query = query.eq("content_class", "niche");
+      return query.gte("published_at", since).limit(10_000);
+    };
+    let { data, error: videoError } = await readVideos(true);
+    if (videoError && isMissingContentQualityColumn(videoError)) {
+      const legacy = await readVideos(false);
+      data = legacy.data;
+      videoError = legacy.error;
+    }
     if (videoError) throw videoError;
-    videoData.push(...((data ?? []) as VideoRow[]));
+    videoData.push(...((data ?? []) as unknown as VideoRow[]));
   }
 
   const videosByChannel = new Map<string, VideoRow[]>();

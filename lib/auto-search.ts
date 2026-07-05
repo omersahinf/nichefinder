@@ -93,6 +93,7 @@ function smartQueueScore(row: SeedKeywordRow): number {
   const priority = Number(row.priority ?? 50);
   const yieldScore = channels / Math.max(runs, 1);
   const sourceBonus: Record<string, number> = {
+    niche_graph_ai: 34,
     pattern_probe: 26,
     ai_slot: 24,
     ai_vertical: 18,

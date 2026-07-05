@@ -1,9 +1,12 @@
 import {
   getChannelVideoSamples,
   getExistingVideoIds,
+  disableSeedChannels,
   listSeedChannels,
+  logContentRejections,
   markSeedChannelsCrawled,
   recordApiUsage,
+  updateChannelContentQuality,
   upsertChannels,
   upsertChannelTags,
   upsertChannelTrends,
@@ -21,6 +24,8 @@ import type { EnrichedVideo } from "./search-types";
 import type { ChannelTrend } from "./trend";
 import { matchAlerts, markAlertNotified } from "./alerts";
 import { sendAlertEmail } from "./email";
+import { classifyVideoContent, type ContentQualityReason } from "./content-quality";
+import { parseIsoDurationToSeconds } from "./duration";
 
 export interface RefreshSeedsOptions {
   channelIds?: string[];
@@ -79,6 +84,7 @@ function buildEnrichedVideo(
     likes: stat.likes,
     comments: stat.comments,
     duration: stat.duration,
+    durationSeconds: parseIsoDurationToSeconds(stat.duration),
     channelSubs: channel.subs,
     channelAvgViews,
     channelTotalViews: channel.totalViews,
@@ -97,6 +103,40 @@ function buildEnrichedVideo(
     ...video,
     outlierReason: getOutlierReason(video),
   };
+}
+
+function channelQualityFromClassifiedVideos(
+  videos: EnrichedVideo[],
+): Array<{
+  channelId: string;
+  contentClass: "niche" | "junk";
+  reasons: ContentQualityReason[];
+  junkVideoRatio: number;
+}> {
+  const byChannel = new Map<string, { total: number; junk: number; reasons: Map<ContentQualityReason, number> }>();
+  for (const video of videos) {
+    const current = byChannel.get(video.channelId) ?? { total: 0, junk: 0, reasons: new Map() };
+    current.total += 1;
+    if (video.contentClass === "junk") {
+      current.junk += 1;
+      for (const reason of video.contentReasons ?? []) {
+        current.reasons.set(reason, (current.reasons.get(reason) ?? 0) + 1);
+      }
+    }
+    byChannel.set(video.channelId, current);
+  }
+  return [...byChannel.entries()].map(([channelId, stats]) => {
+    const junkVideoRatio = stats.total > 0 ? stats.junk / stats.total : 0;
+    return {
+      channelId,
+      contentClass: stats.total >= 2 && junkVideoRatio >= 0.5 ? "junk" : "niche",
+      reasons: [...stats.reasons.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([reason]) => reason),
+      junkVideoRatio,
+    };
+  });
 }
 
 export async function refreshSeedChannels(
@@ -166,10 +206,34 @@ export async function refreshSeedChannels(
     return [buildEnrichedVideo(ref, stat, channel)];
   });
 
-  await upsertVideos(videos);
+  const classifiedVideos = videos.map((video) => {
+    const durationSeconds = video.durationSeconds ?? parseIsoDurationToSeconds(video.duration);
+    const classification = classifyVideoContent({ ...video, durationSeconds });
+    return {
+      ...video,
+      durationSeconds,
+      contentClass: classification.contentClass,
+      contentReasons: classification.reasons,
+      contentScore: classification.score,
+    };
+  });
+  const nicheVideos = classifiedVideos.filter((video) => video.contentClass === "niche");
+  const junkVideos = classifiedVideos.filter((video) => video.contentClass === "junk");
+
+  if (junkVideos.length > 0) await logContentRejections(junkVideos, "refreshSeedChannels");
+  await upsertVideos(nicheVideos);
+
+  const channelQuality = channelQualityFromClassifiedVideos(classifiedVideos);
+  await updateChannelContentQuality(channelQuality);
+  const junkChannelIds = channelQuality
+    .filter((entry) => entry.contentClass === "junk")
+    .map((entry) => entry.channelId);
+  if (junkChannelIds.length > 0) {
+    await disableSeedChannels(junkChannelIds, "content_quality_junk_ratio");
+  }
 
   const tagCountsByChannel = new Map<string, Map<string, number>>();
-  for (const video of videos) {
+  for (const video of nicheVideos) {
     for (const tag of video.tags ?? []) {
       const normalized = tag.trim().toLowerCase();
       if (!normalized) continue;
@@ -200,7 +264,7 @@ export async function refreshSeedChannels(
   await upsertChannelTrends(trends);
   await markSeedChannelsCrawled(seedIds);
 
-  const alertMatches = await matchAlerts(videos);
+  const alertMatches = await matchAlerts(nicheVideos);
   let emailsSent = 0;
   for (const match of alertMatches) {
     if (await sendAlertEmail(match.alert.email, match.matches)) {
@@ -215,7 +279,8 @@ export async function refreshSeedChannels(
     {
       job: "refresh-seeds",
       seeds: seedChannels.length,
-      newVideos: videos.length,
+      newVideos: nicheVideos.length,
+      rejectedVideos: junkVideos.length,
       alertMatches: alertMatches.reduce((sum, match) => sum + match.matches.length, 0),
       emailsSent,
     },
@@ -224,7 +289,7 @@ export async function refreshSeedChannels(
 
   return {
     seeds: seedChannels.length,
-    newVideos: videos.length,
+    newVideos: nicheVideos.length,
     refreshedChannels: channelsWithMonetization.length,
     units,
     alertMatches: alertMatches.reduce((sum, match) => sum + match.matches.length, 0),

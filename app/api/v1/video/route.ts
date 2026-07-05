@@ -25,6 +25,7 @@ interface VideoRow {
   thumbnail_url: string | null;
   outlier_score: number | string | null;
   outlier_reason: string | null;
+  content_class?: string | null;
 }
 
 interface ChannelRow {
@@ -34,6 +35,16 @@ interface ChannelRow {
   total_views: number | string | null;
   video_count: number | string | null;
   thumbnail_url: string | null;
+  content_class?: string | null;
+}
+
+function isMissingContentQualityColumn(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  );
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -63,11 +74,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const { data: videoData, error: videoError } = await client
-      .from("videos")
-      .select("youtube_id,channel_id,channel_title,title,views,likes,comments,duration,published_at,thumbnail_url,outlier_score,outlier_reason")
-      .eq("youtube_id", videoId)
-      .maybeSingle();
+    const readVideo = async (includeContentQuality: boolean) => {
+      let query = client
+        .from("videos")
+        .select(
+          includeContentQuality
+            ? "youtube_id,channel_id,channel_title,title,views,likes,comments,duration,published_at,thumbnail_url,outlier_score,outlier_reason,content_class"
+            : "youtube_id,channel_id,channel_title,title,views,likes,comments,duration,published_at,thumbnail_url,outlier_score,outlier_reason",
+        )
+        .eq("youtube_id", videoId);
+      if (includeContentQuality) query = query.eq("content_class", "niche");
+      return query.maybeSingle();
+    };
+    let { data: videoData, error: videoError } = await readVideo(true);
+    if (videoError && isMissingContentQualityColumn(videoError)) {
+      const legacy = await readVideo(false);
+      videoData = legacy.data;
+      videoError = legacy.error;
+    }
 
     if (videoError) throw videoError;
 
@@ -75,13 +99,26 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Video not found in cache" }, { status: 404 });
     }
 
-    const video = videoData as VideoRow;
+    const video = videoData as unknown as VideoRow;
 
-    const { data: channelData, error: channelError } = await client
-      .from("channels")
-      .select("youtube_id,title,subs,total_views,video_count,thumbnail_url")
-      .eq("youtube_id", video.channel_id)
-      .maybeSingle();
+    const readChannel = async (includeContentQuality: boolean) => {
+      let query = client
+        .from("channels")
+        .select(
+          includeContentQuality
+            ? "youtube_id,title,subs,total_views,video_count,thumbnail_url,content_class"
+            : "youtube_id,title,subs,total_views,video_count,thumbnail_url",
+        )
+        .eq("youtube_id", video.channel_id);
+      if (includeContentQuality) query = query.neq("content_class", "junk");
+      return query.maybeSingle();
+    };
+    let { data: channelData, error: channelError } = await readChannel(true);
+    if (channelError && isMissingContentQualityColumn(channelError)) {
+      const legacy = await readChannel(false);
+      channelData = legacy.data;
+      channelError = legacy.error;
+    }
 
     if (channelError) throw channelError;
 

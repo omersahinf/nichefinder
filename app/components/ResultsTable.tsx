@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import type { ReactNode } from "react";
 import type { EnrichedVideo } from "@/lib/search-types";
 import { formatDurationLabel } from "@/lib/duration";
 import { buildOutlierExplanation } from "@/lib/outlier-reasons";
@@ -249,7 +248,6 @@ export function ResultsTable({ videos, showRevenue, source, totalCount, pageSize
       const rpm = (v.estimatedRevenueUsd / (v.views / 1000));
       if (rpm >= 8) badges.push("High RPM");
     }
-    if (v.isShort) badges.push("Shorts");
     return badges;
   };
 

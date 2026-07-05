@@ -33,6 +33,16 @@ export const DEFAULT_FILTERS: Filters = {
   minViews: 0, minOutlier: 0, format: "all", sort: "outlier",
 };
 
+export const DEFAULT_OUTLIER_FEED_FILTERS: Filters = {
+  ...DEFAULT_FILTERS,
+  dateMode: "preset",
+  days: 30,
+  minViews: 10_000,
+  minOutlier: 3,
+  format: "all",
+  sort: "date",
+};
+
 export const SUB_PRESETS = [
   { label: "All",       min: 0,         max: MAX_SUBS   },
   { label: "<1K",       min: 0,         max: 1_000      },
@@ -54,16 +64,15 @@ export const DAYS_OPTIONS = [
 export const FORMAT_OPTIONS: Array<{ label: string; value: VideoFormat }> = [
   { label: "All videos", value: "all"      },
   { label: "Standard",   value: "standard" },
-  { label: "Shorts only", value: "shorts"  },
 ];
 
 export const EXAMPLE_CHIPS = [
   "AI takeover documentary",
   "faceless finance",
-  "history shorts",
+  "history documentary",
   "ancient engineering",
   "stoicism explained",
-  "self-improvement micro",
+  "productivity systems",
 ];
 
 export const fmt = (n: number): string => {
@@ -71,6 +80,8 @@ export const fmt = (n: number): string => {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
 };
+
+const compactFmt = (n: number): string => fmt(n).replace(/\.0([KM])$/, "$1");
 
 export const daysAgo = (iso: string): string => {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -271,10 +282,10 @@ export function activeFilterChips(filters: Filters, setFilters: (fn: (f: Filters
     chips.push({ key: "subs", label: `Subs: ${subPreset?.label ?? `${fmt(filters.minSubs)}-${fmt(filters.maxSubs)}`}`, clear: () => setFilters((c) => ({ ...c, subsMode: "preset", minSubs: 0, maxSubs: MAX_SUBS })) });
   if (filters.dateMode === "preset" && filters.days > 0) {
     const option = DAYS_OPTIONS.find((o) => o.value === filters.days);
-    chips.push({ key: "date", label: `Date: ${option?.chip ?? `last ${filters.days}d`}`, clear: () => setFilters((c) => ({ ...c, days: 0 })) });
+    chips.push({ key: "date", label: option?.chip ?? `last ${filters.days}d`, clear: () => setFilters((c) => ({ ...c, days: 0 })) });
   }
-  if (filters.minViews > 0) chips.push({ key: "views", label: `Min views: ${fmt(filters.minViews)}`, clear: () => setFilters((c) => ({ ...c, minViews: 0 })) });
-  if (filters.minOutlier > 0) chips.push({ key: "outlier", label: `Min outlier: ${filters.minOutlier}x`, clear: () => setFilters((c) => ({ ...c, minOutlier: 0 })) });
+  if (filters.minViews > 0) chips.push({ key: "views", label: `${compactFmt(filters.minViews)}+ views`, clear: () => setFilters((c) => ({ ...c, minViews: 0 })) });
+  if (filters.minOutlier > 0) chips.push({ key: "outlier", label: `${filters.minOutlier}x+ outlier`, clear: () => setFilters((c) => ({ ...c, minOutlier: 0 })) });
   if (filters.durationMode === "preset" && filters.durationPreset !== "Any")
     chips.push({ key: "duration", label: `Duration: ${filters.durationPreset}`, clear: () => setFilters((c) => ({ ...c, durationMode: "preset", durationPreset: "Any" })) });
   if (filters.durationMode === "custom" && (filters.minDurationMinutes > 0 || filters.maxDurationMinutes > 0))

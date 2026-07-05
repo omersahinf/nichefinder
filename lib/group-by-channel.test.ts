@@ -76,4 +76,45 @@ describe("groupVideosByChannel", () => {
     const groups = groupVideosByChannel(videos);
     expect(groups[0].avgOutlierScore).toBe(6);
   });
+
+  it("computes typicalViews as median views", () => {
+    const videos = [
+      makeVideo({ id: "v1", views: 10_000 }),
+      makeVideo({ id: "v2", views: 100_000 }),
+      makeVideo({ id: "v3", views: 30_000 }),
+    ];
+    const groups = groupVideosByChannel(videos);
+    expect(groups[0].typicalViews).toBe(30_000);
+  });
+
+  it("dedupes and ranks niche chips from categories and tags", () => {
+    const videos = [
+      makeVideo({ id: "v1", category: "movie_explanations", tags: ["Hindi", "Action", "Hindi"] }),
+      makeVideo({ id: "v2", category: "movie_explanations", tags: ["action", "Urdu"] }),
+    ];
+    const groups = groupVideosByChannel(videos);
+    expect(groups[0].nicheChips).toEqual([
+      "Movie Explanations",
+      "Action",
+      "Hindi",
+      "Urdu",
+    ]);
+  });
+
+  it("detects channel content type", () => {
+    expect(groupVideosByChannel([
+      makeVideo({ id: "v1", durationSeconds: 30, isShort: true }),
+      makeVideo({ id: "v2", durationSeconds: 45, isShort: true }),
+    ])[0].contentType).toBe("Shorts");
+
+    expect(groupVideosByChannel([
+      makeVideo({ id: "v1", durationSeconds: 480, isShort: false }),
+      makeVideo({ id: "v2", durationSeconds: 900, isShort: false }),
+    ])[0].contentType).toBe("Long-Form");
+
+    expect(groupVideosByChannel([
+      makeVideo({ id: "v1", durationSeconds: 30, isShort: true }),
+      makeVideo({ id: "v2", durationSeconds: 900, isShort: false }),
+    ])[0].contentType).toBe("Mixed");
+  });
 });

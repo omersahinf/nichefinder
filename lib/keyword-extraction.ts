@@ -26,7 +26,40 @@ const STOPWORDS = new Set([
   "best",
   "top",
   "vs",
+  "shorts",
+  "trailer",
+  "teaser",
+  "live",
+  "stream",
+  "gameplay",
+  "highlights",
 ]);
+
+const BLOCKED_TERMS = new Set([
+  "shorts",
+  "youtube shorts",
+  "trailer",
+  "teaser",
+  "promo",
+  "gameplay",
+  "minecraft",
+  "fortnite",
+  "roblox",
+  "match highlights",
+  "game highlights",
+  "live stream",
+  "movie clip",
+  "episode",
+]);
+
+function isMissingContentQualityColumn(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class")
+  );
+}
 
 interface VideoKeywordRow {
   tags: string[] | null;
@@ -86,6 +119,8 @@ function addCandidate(
 ): void {
   const term = normalizeTerm(rawTerm);
   if (term.length < 3 || /^\d+$/.test(term)) return;
+  if (BLOCKED_TERMS.has(term)) return;
+  if ([...BLOCKED_TERMS].some((blocked) => term.includes(blocked))) return;
 
   const current = map.get(term) ?? {
     term,
@@ -125,11 +160,17 @@ export async function runKeywordExtraction(): Promise<KeywordDiscoveryResult> {
   if (!client) throw new Error("Supabase is not configured");
 
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await client
-    .from("videos")
-    .select("tags,title,channel_id")
-    .gte("fetched_at", since)
-    .limit(5_000);
+  const readVideos = async (includeContentQuality: boolean) => {
+    let query = client.from("videos").select("tags,title,channel_id");
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query.gte("fetched_at", since).limit(5_000);
+  };
+  let { data, error } = await readVideos(true);
+  if (error && isMissingContentQualityColumn(error)) {
+    const legacy = await readVideos(false);
+    data = legacy.data;
+    error = legacy.error;
+  }
 
   if (error) throw error;
 

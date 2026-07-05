@@ -41,7 +41,6 @@ function variationsFor(keyword: string): string[] {
     `${value} explained`,
     `${value} for beginners`,
     `how to ${value}`,
-    `${value} shorts`,
     `${value} tips`,
     `${value} 2026`,
   ];

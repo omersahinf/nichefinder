@@ -33,6 +33,7 @@ interface ChannelRow {
   is_monetized: boolean | null;
   thumbnail_url: string | null;
   avg_views_last_30: number | string | null;
+  content_class?: string | null;
 }
 
 interface VideoRow {
@@ -53,6 +54,7 @@ interface VideoRow {
   outlier_reason: string | null;
   channel_subs?: number;
   channel_avg_views?: number;
+  content_class?: string | null;
 }
 
 function toEnrichedVideo(row: VideoRow, channel: ChannelRow): EnrichedVideo {
@@ -99,19 +101,39 @@ export default async function ChannelDetailPage({ params }: { params: Promise<{ 
     return <div className="p-8 text-neutral-400">Database not configured.</div>;
   }
 
-  const [channelRes, videosRes] = await Promise.all([
-    client
+  const readChannel = async (includeContentQuality: boolean) => {
+    let query = client
       .from("channels")
-      .select("youtube_id,title,description,subs,total_views,video_count,created_at,category,country,is_monetized,thumbnail_url,avg_views_last_30")
-      .eq("youtube_id", id)
-      .maybeSingle(),
-    client
+      .select(
+        includeContentQuality
+          ? "youtube_id,title,description,subs,total_views,video_count,created_at,category,country,is_monetized,thumbnail_url,avg_views_last_30,content_class"
+          : "youtube_id,title,description,subs,total_views,video_count,created_at,category,country,is_monetized,thumbnail_url,avg_views_last_30",
+      )
+      .eq("youtube_id", id);
+    if (includeContentQuality) query = query.neq("content_class", "junk");
+    return query.maybeSingle();
+  };
+  const readVideos = async (includeContentQuality: boolean) => {
+    let query = client
       .from("videos")
-      .select("youtube_id,title,views,outlier_score,published_at,thumbnail_url,duration_seconds,channel_id,channel_title,likes,comments,duration,description,tags,outlier_reason")
-      .eq("channel_id", id)
-      .order("published_at", { ascending: false })
-      .limit(30),
-  ]);
+      .select(
+        includeContentQuality
+          ? "youtube_id,title,views,outlier_score,published_at,thumbnail_url,duration_seconds,channel_id,channel_title,likes,comments,duration,description,tags,outlier_reason,content_class"
+          : "youtube_id,title,views,outlier_score,published_at,thumbnail_url,duration_seconds,channel_id,channel_title,likes,comments,duration,description,tags,outlier_reason",
+      )
+      .eq("channel_id", id);
+    if (includeContentQuality) query = query.eq("content_class", "niche");
+    return query.order("published_at", { ascending: false }).limit(30);
+  };
+  let [channelRes, videosRes] = await Promise.all([readChannel(true), readVideos(true)]);
+  const missingContentColumn = (error: unknown) =>
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    String(error.message).includes("content_class");
+  if (missingContentColumn(channelRes.error) || missingContentColumn(videosRes.error)) {
+    [channelRes, videosRes] = await Promise.all([readChannel(false), readVideos(false)]);
+  }
 
   const channel = channelRes.data as ChannelRow | null;
   if (!channel) {
@@ -126,7 +148,7 @@ export default async function ChannelDetailPage({ params }: { params: Promise<{ 
     );
   }
 
-  const videos = ((videosRes.data ?? []) as VideoRow[]).map((v) => toEnrichedVideo(v, channel));
+  const videos = ((videosRes.data ?? []) as unknown as VideoRow[]).map((v) => toEnrichedVideo(v, channel));
   const similarChannels = await findSimilarChannels(id, 8);
 
   const channelUrl = `https://youtube.com/channel/${id}`;

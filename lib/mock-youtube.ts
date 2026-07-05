@@ -27,7 +27,7 @@ const VIDEO_PATTERNS = [
   "{query} niche map for 2026",
   "Why this {query} video broke out",
   "Low competition {query} angle breakdown",
-  "{query} shorts vs long-form: quick test",
+  "{query} long-form format breakdown",
   "How I would start a {query} channel today",
   "{query} topic ideas with high outlier odds",
   "{query} thumbnail hooks that keep working",
